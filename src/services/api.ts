@@ -302,6 +302,11 @@ export interface DispatchPayload {
   scheduledAt?: string;
   expiresAt?: string;
   templateId?: number;
+  /**
+   * Solo email. Omitido = email de respuesta por defecto; 'none' = sin
+   * Reply-To; o una de las direcciones registradas como email de respuesta.
+   */
+  replyTo?: string;
 }
 
 export interface PersonalizationField {
@@ -361,6 +366,7 @@ export function sendEmailCampaign(
     if (payload.scheduledAt) form.append('scheduledAt', payload.scheduledAt);
     if (payload.expiresAt) form.append('expiresAt', payload.expiresAt);
     if (payload.templateId) form.append('templateId', String(payload.templateId));
+    if (payload.replyTo !== undefined) form.append('replyTo', payload.replyTo);
     payload.attachments.forEach((f) => form.append('attachments[]', f));
     return request('/email/send', { method: 'POST', body: form });
   }
@@ -369,7 +375,7 @@ export function sendEmailCampaign(
   return request('/email/send', { method: 'POST', body: jsonBody(rest) });
 }
 
-export function sendEmailTest(payload: { to: string; subject: string; body: string }): Promise<DispatchResponse> {
+export function sendEmailTest(payload: { to: string; subject: string; body: string; replyTo?: string }): Promise<DispatchResponse> {
   return request('/email/test', { method: 'POST', body: jsonBody(payload) });
 }
 
@@ -693,6 +699,21 @@ export function sendCampaignNow(id: number): Promise<{ success: boolean; campaig
 }
 export function deleteCampaign(id: number): Promise<{ success: boolean }> {
   return request(`/campaigns/${id}`, { method: 'DELETE' });
+}
+
+// ---- Saldo (solo lectura; la recarga es por consola en el servidor) ----
+export interface Balance {
+  /** Saldo disponible en pesos. */
+  balance: number;
+  currency: string;
+  /** % del saldo respecto al que quedó tras la última recarga. */
+  percent: number;
+  /** true si queda menos del 20 %. */
+  low: boolean;
+}
+
+export function getBalance(): Promise<Balance> {
+  return request('/balance');
 }
 
 // ---- Dashboard ----

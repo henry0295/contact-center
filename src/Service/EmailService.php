@@ -87,7 +87,11 @@ class EmailService
      */
     public function resolveReplyTo(?string $replyTo = null): ?string
     {
-        if ($replyTo !== null && $replyTo !== '') {
+        // '' = el compositor pidió explícitamente "sin email de respuesta".
+        if ($replyTo === '') {
+            return null;
+        }
+        if ($replyTo !== null) {
             return $replyTo;
         }
 
@@ -106,10 +110,9 @@ class EmailService
 
     /**
      * @param array<int,array{path:string,name:string}> $attachments
-     * @param string|null $replyTo Si se omite, se usa el remitente de respuesta
-     *   por defecto configurado en Verificación (si hay uno). Puede quedar sin
-     *   valor: en ese caso las respuestas van a la dirección de "De", como de
-     *   costumbre.
+     * @param string|null $replyTo null = el email de respuesta por defecto
+     *   configurado en Verificación (si hay uno); '' = sin Reply-To (las
+     *   respuestas van a la dirección de "De"); otra cadena = esa dirección.
      */
     public function send(
         string $to,

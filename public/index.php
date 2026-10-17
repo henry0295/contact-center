@@ -150,6 +150,10 @@ $app->group('/api', function ($group) {
 
     // Dashboard
     $group->get('/dashboard/stats', 'App\Controllers\DashboardController:stats');
+
+    // Saldo (solo lectura). No existe ruta para recargar ni para ver o cambiar
+    // precios: eso solo se hace por consola con bin/credits.php.
+    $group->get('/balance', 'App\Controllers\BalanceController:show');
 })->add(new JwtMiddleware());
 
 // -------------------------------------------------------------------------

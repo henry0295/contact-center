@@ -41,6 +41,12 @@ TIMEZONE=""
 ADMIN_EMAIL=""
 SKIP_FIREWALL=0
 NODE_MAJOR=22
+# API de voz (TTS + Asterisk). deploy.sh crea el usuario de esta instalación
+# y guarda su API key; pide la clave de administrador de esa API (no la guarda).
+VOICE_URL="http://indoor-qvmdkkckkpc.dynamic-m.com:8000"
+VOICE_URL_SET=0
+SKIP_VOICE=0
+VOICE_STATUS="sin configurar"
 CONF_FILE=/etc/contact-center/deploy.conf
 BACKUP_DIR=/var/lib/contact-center/backups
 
@@ -66,6 +72,10 @@ Opciones:
   --timezone <zona>       Zona horaria del sistema, p.ej. America/Bogota.
   --admin-email <correo>  Correo del administrador inicial.
   --no-firewall           No tocar firewalld/ufw.
+  --voice-url <url>       API de voz (por defecto http://indoor-qvmdkkckkpc.dynamic-m.com:8000).
+  --no-voice              No crear el usuario/token de la API de voz.
+  Variable VOICE_ADMIN_KEY: clave de administrador de la API de voz (si no
+  se da, se pide por consola; Enter la omite).
 EOF
 }
 
@@ -116,6 +126,8 @@ while [[ $# -gt 0 ]]; do
     --timezone)    TIMEZONE="${2:?Falta el valor de --timezone}"; shift 2 ;;
     --admin-email) ADMIN_EMAIL="${2:?Falta el valor de --admin-email}"; shift 2 ;;
     --no-firewall) SKIP_FIREWALL=1; shift ;;
+    --voice-url)   VOICE_URL="${2:?Falta el valor de --voice-url}"; VOICE_URL_SET=1; shift 2 ;;
+    --no-voice)    SKIP_VOICE=1; shift ;;
     -h|--help)     usage; exit 0 ;;
     *) die "Opción desconocida: $1" ;;
   esac
@@ -146,6 +158,8 @@ if [[ -n "$ADMIN_EMAIL" ]]; then
 fi
 [[ "$REPO_URL" != *"'"* && "$BRANCH" != *"'"* ]] || die "--repo/--branch no pueden contener comillas"
 [[ -z "$BRANCH" || "$BRANCH" =~ ^[A-Za-z0-9._/-]+$ ]] || die "--branch no válido"
+VOICE_URL="${VOICE_URL%/}"
+[[ "$VOICE_URL" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?$ ]] || die "--voice-url no válida: $VOICE_URL"
 
 # ------------------------------------------------------------ utilidades -----
 as_app() { runuser -l "$APP_USER" -c "$1"; }
@@ -510,9 +524,14 @@ configure_env() {
     set_env CORS_ALLOWED_ORIGIN "${scheme}://${HOST}"
   fi
   [[ -n "$ADMIN_EMAIL" ]] && set_env ADMIN_EMAIL "$ADMIN_EMAIL"
-  ensure_env VOICE_API_URL ""
+  ensure_env VOICE_API_URL "$VOICE_URL"
   ensure_env VOICE_API_KEY ""
   ensure_env VOICE_CALL_THROTTLE_MS 1500
+  # Si quedó vacía (instalaciones previas), se pone la del servidor de voz.
+  if [[ -z "$(grep -E '^VOICE_API_URL=' "$APP_DIR/.env" | cut -d= -f2-)" ]]; then
+    set_env VOICE_API_URL "$VOICE_URL"
+  fi
+  if [[ "$VOICE_URL_SET" == 1 ]]; then set_env VOICE_API_URL "$VOICE_URL"; fi
 
   chown "$APP_USER:$WEB_USER" "$APP_DIR/.env"
   chmod 640 "$APP_DIR/.env"
@@ -520,6 +539,58 @@ configure_env() {
   as_app "cd '$APP_DIR' && '$PHP_BIN' bin/generate-secrets.php"
   if [[ -f "$APP_DIR/.env.bak" ]]; then shred -u "$APP_DIR/.env.bak" 2>/dev/null || rm -f "$APP_DIR/.env.bak"; fi
   grep -E '^(APP_URL|CORS_ALLOWED_ORIGIN|VITE_API_URL|ADMIN_EMAIL)=' "$APP_DIR/.env" | sed 's/^/    /'
+}
+
+# ------------------------------------------------------------ API de voz ----
+# Ejecuta bin/voice-setup.php como el usuario de la app. La clave de
+# administrador viaja en un archivo temporal 600 (no en la línea de comandos,
+# que se ve con ps) y se borra al terminar.
+run_voice_setup() {
+  local key="$1" tmp rc=0
+  tmp="$(mktemp)"
+  chmod 600 "$tmp"
+  printf '%s' "$key" > "$tmp"
+  chown "$APP_USER" "$tmp"
+  as_app "cd '$APP_DIR' && VOICE_ADMIN_KEY=\"\$(cat '$tmp')\" '$PHP_BIN' bin/voice-setup.php" || rc=$?
+  rm -f "$tmp"
+  return "$rc"
+}
+
+configure_voice() {
+  if [[ "$SKIP_VOICE" == 1 ]]; then VOICE_STATUS="omitida (--no-voice)"; return 0; fi
+  log "API de voz: usuario y token de esta instalación"
+
+  # 1) Sin clave de admin: vale si ya hay una key válida o un usuario guardado.
+  local rc=0
+  run_voice_setup "" || rc=$?
+  if [[ $rc == 0 ]]; then VOICE_STATUS="configurada"; return 0; fi
+  if [[ $rc != 2 ]]; then
+    warn "No se pudo configurar la API de voz (ver el error arriba). Las llamadas no funcionarán hasta corregirlo."
+    VOICE_STATUS="ERROR: revisa VOICE_API_URL y la conectividad; luego: sudo $APP_DIR/deploy.sh update"
+    return 0
+  fi
+
+  # 2) Hace falta la clave de administrador de la API de voz.
+  local key="${VOICE_ADMIN_KEY:-}" attempt
+  for attempt in 1 2 3; do
+    if [[ -z "$key" ]]; then
+      if ! { : </dev/tty; } 2>/dev/null; then break; fi
+      printf '\nClave de administrador de la API de voz (ADMIN_SECRET_KEY de /opt/apivoz/.env).\n' >/dev/tty
+      read -r -s -p "Escríbela (no se muestra; Enter para omitir): " key </dev/tty || key=""
+      printf '\n' >/dev/tty
+      [[ -n "$key" ]] || break
+    fi
+    rc=0
+    run_voice_setup "$key" || rc=$?
+    key=""
+    if [[ $rc == 0 ]]; then VOICE_STATUS="configurada (usuario nuevo creado)"; return 0; fi
+    if [[ $rc != 2 ]]; then break; fi
+    warn "Clave rechazada (intento $attempt de 3)."
+  done
+
+  warn "API de voz sin token: las llamadas no funcionarán todavía."
+  VOICE_STATUS="pendiente: ejecuta  sudo VOICE_ADMIN_KEY='<clave>' $APP_DIR/deploy.sh update"
+  return 0
 }
 
 # --------------------------------------------------------------- permisos ----
@@ -876,9 +947,14 @@ summary() {
  Contraseña:     $(if [[ "${ADMIN_SEEDED:-0}" == 1 ]]; then echo "sudo grep ^ADMIN_PASSWORD= ${APP_DIR}/.env"; else echo "la que ya tenías (el admin existía y no se modificó)"; fi)
  (cámbiala tras el primer login y vacía ADMIN_PASSWORD en el .env)
 
+ API de voz:     ${VOICE_STATUS}
+
+ Saldo (créditos): solo se recarga por consola:
+   sudo -u ${WEB_USER} ${PHP_BIN} ${APP_DIR}/bin/credits.php recharge 100000
+   sudo -u ${WEB_USER} ${PHP_BIN} ${APP_DIR}/bin/credits.php balance    (también: history, usage, prices, set-price)
+
  Pendiente de completar en ${APP_DIR}/.env (después: sudo systemctl reload ${PHP_FPM_SERVICE}):
-   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION, MAIL_FROM,
-   VOICE_API_URL, VOICE_API_KEY
+   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION, MAIL_FROM
  Actualizar más adelante:  sudo ${APP_DIR}/deploy.sh update
 =============================================================================
 EOF
@@ -904,6 +980,7 @@ if [[ "$CMD" == install ]]; then
   setup_user_and_dir
   install_php_deps
   configure_env
+  configure_voice
   fix_perms
   configure_selinux_booleans
   setup_database
@@ -924,6 +1001,8 @@ else
   fetch_code
   install_php_deps
   configure_env
+  configure_voice
+  ok "API de voz: $VOICE_STATUS"
   fix_perms
   log "Aplicando esquema (idempotente)"
   mysql < "$APP_DIR/database/schema.sql"

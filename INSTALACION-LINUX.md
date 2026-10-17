@@ -656,6 +656,21 @@ curl -sS -o /dev/null -w "%{http_code}\n" -H "X-API-Key: <VOICE_API_KEY>" \
 
 Cualquier código HTTP indica que hay conectividad. Un timeout o `Connection refused` indica que no hay ruta o que el servicio está caído. Si hay firewall en la red de la API de voz, debe permitir la IP del servidor de producción.
 
+**Actualización:** la API de voz también se publica en `http://indoor-qvmdkkckkpc.dynamic-m.com:8000` (valor por defecto de `VOICE_API_URL` en `deploy.sh`), así que no hace falta VPN. `deploy.sh` crea el usuario y el token de esta instalación pidiendo la clave de administrador de la API de voz (o con `VOICE_ADMIN_KEY='<clave>'`), y no la guarda. A mano: `sudo -iu contactcenter bash -c "cd /var/www/contact-center && VOICE_ADMIN_KEY='<clave>' php bin/voice-setup.php"`.
+
+### 14.1 Saldo (créditos) y emails de respuesta
+
+Cada envío descuenta saldo prepago (SMS $27, email $20, llamada $75; precios internos, nunca visibles en la app). El saldo **solo se recarga por consola**:
+
+```bash
+sudo -u www-data php /var/www/contact-center/bin/credits.php recharge 100000 --note="Factura 123"
+sudo -u www-data php /var/www/contact-center/bin/credits.php balance
+sudo -u www-data php /var/www/contact-center/bin/credits.php history --limit=20
+sudo -u www-data php /var/www/contact-center/bin/credits.php set-price sms 27
+```
+
+Los emails de respuesta (varios, de cualquier dominio, sin verificación SES) se agregan en Verificación → Email de respuesta y se eligen por envío en el módulo Email. Detalle completo en `INSTALACION-ROCKY9.md` §14.
+
 ---
 
 ## 15. Verificación post-instalación

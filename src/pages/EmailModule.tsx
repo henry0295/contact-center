@@ -1,13 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Mail, Users, FileText, Trash2, Send, Loader2, LayoutTemplate, Eye, Pencil,
-  Paperclip, Tag, Clock, CalendarX, TestTube2, Sparkles, History, ChevronDown, Download,
+  Paperclip, Tag, Clock, CalendarX, TestTube2, Sparkles, History, ChevronDown, Download, Reply,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as api from '../services/api';
 import RichTextEditor from '../components/RichTextEditor';
 import AttachmentPicker from '../components/AttachmentPicker';
 import { useSesData } from '../context/SesDataContext';
+import { refreshBalance } from '../components/BalanceGauge';
 import {
   type RecipientEntry, parseRecipients, parseRecipientsCsv, downloadCsv, EMAIL_HEADERS,
 } from '../utils/csvRecipients';
@@ -44,6 +45,10 @@ const EmailModule: React.FC = () => {
   const [message, setMessage] = useState('');
   const [files, setFiles] = useState<File[]>([]);
   const [tags, setTags] = useState('');
+  // Email de respuesta (Reply-To): una de las direcciones creadas en
+  // Verificación > Email de respuesta, o 'none' para que respondan al remitente.
+  const [replyOptions, setReplyOptions] = useState<api.SenderRow[]>([]);
+  const [replyTo, setReplyTo] = useState('none');
   const [source, setSource] = useState<RecipientSource>('paste');
   const [pasteText, setPasteText] = useState('');
   const [csvText, setCsvText] = useState('');
@@ -74,6 +79,13 @@ const EmailModule: React.FC = () => {
   useEffect(() => {
     api.listLists().then((r) => setLists(r.lists)).catch(() => {});
     api.emailFields().then((r) => { setFields(r.fields); setPrevious(r.previous); }).catch(() => {});
+    api.listSenders('reply')
+      .then((r) => {
+        setReplyOptions(r.senders);
+        const def = r.senders.find((s) => s.is_default);
+        setReplyTo(def ? def.email : 'none');
+      })
+      .catch(() => {});
     refreshTemplates();
   }, []);
 
@@ -147,6 +159,7 @@ const EmailModule: React.FC = () => {
       body: message,
       tags: tags.trim() || undefined,
       scheduleType,
+      replyTo,
     };
 
     if (scheduleType === 'scheduled') {
@@ -185,6 +198,7 @@ const EmailModule: React.FC = () => {
       toast.error(err instanceof Error ? err.message : 'Error al enviar');
     } finally {
       setSending(false);
+      refreshBalance();
     }
   };
 
@@ -194,7 +208,7 @@ const EmailModule: React.FC = () => {
 
     setTestSending(true);
     try {
-      const res = await api.sendEmailTest({ to: testEmail.trim(), subject, body: message });
+      const res = await api.sendEmailTest({ to: testEmail.trim(), subject, body: message, replyTo });
       if (res.success) {
         toast.success(res.message);
         setTestOpen(false);
@@ -206,6 +220,7 @@ const EmailModule: React.FC = () => {
       toast.error(err instanceof Error ? err.message : 'Error al enviar la prueba');
     } finally {
       setTestSending(false);
+      refreshBalance();
     }
   };
 
@@ -519,6 +534,25 @@ const EmailModule: React.FC = () => {
                   {lists.map((l) => <option key={l.id} value={l.id}>{l.name} ({l.member_count})</option>)}
                 </select>
               )}
+            </div>
+
+            <div>
+              <label htmlFor="replyTo" className={labelClass}>
+                <Reply className="mr-1 inline h-3.5 w-3.5 text-gray-400" /> Email de respuesta
+              </label>
+              <select id="replyTo" value={replyTo} onChange={(e) => setReplyTo(e.target.value)} className={inputClass}>
+                <option value="none">Sin email de respuesta (responden al remitente)</option>
+                {replyOptions.map((s) => (
+                  <option key={s.id} value={s.email}>
+                    {s.email}{s.is_default ? ' (por defecto)' : ''}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1 text-xs text-gray-500">
+                {replyOptions.length === 0
+                  ? 'Agrega emails de respuesta en Verificación > Email de respuesta.'
+                  : 'Cuando el destinatario pulse "Responder", el correo llegará a esta dirección.'}
+              </p>
             </div>
 
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">

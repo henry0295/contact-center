@@ -79,6 +79,43 @@ class SenderVerificationController
             return $this->jsonResponse($response, ['error' => 'Se requiere un correo de remitente válido'], 400);
         }
 
+        $existing = $this->repo->findByEmail($email);
+        if ($existing !== null && ($existing['type'] ?? 'sender') !== $type) {
+            return $this->jsonResponse($response, [
+                'error' => $type === 'reply'
+                    ? 'Ese correo ya está registrado como remitente; usa otro para respuestas.'
+                    : 'Ese correo ya está registrado como email de respuesta.',
+            ], 409);
+        }
+
+        // Email de respuesta: la cabecera Reply-To NO necesita verificarse en
+        // SES (solo el remitente "De"), así que puede ser cualquier dirección
+        // (gmail, otro dominio...) y se pueden registrar varios. Queda usable
+        // al instante y se elige uno por envío en el módulo Email.
+        if ($type === 'reply') {
+            try {
+                $this->repo->upsert($email, 'Success', 'reply');
+                $setAsDefault = !empty($data['setAsDefault']) || !$this->repo->hasDefault('reply');
+                if ($setAsDefault) {
+                    $this->repo->setDefault($email);
+                }
+
+                return $this->jsonResponse($response, [
+                    'success'        => true,
+                    'message'        => 'Email de respuesta ' . $email . ' agregado.',
+                    'email'          => $email,
+                    'type'           => 'reply',
+                    'domainVerified' => false,
+                    'isDefault'      => $setAsDefault,
+                ]);
+            } catch (\Throwable $e) {
+                return $this->jsonResponse($response, [
+                    'error'   => 'No se pudo guardar el email de respuesta',
+                    'message' => $e->getMessage(),
+                ], 500);
+            }
+        }
+
         $emailDomain = strtolower(substr($email, strpos($email, '@') + 1));
         $domainVerified = $this->isDomainVerified($emailDomain);
 
@@ -161,12 +198,15 @@ class SenderVerificationController
 
         $wasDefault = (bool) $sender['is_default'];
 
-        try {
-            // Un remitente que hereda la verificación de su dominio puede no
-            // existir como identidad propia en SES: el fallo es inofensivo.
-            $this->ses()->deleteIdentity(['Identity' => $email]);
-        } catch (\Exception $e) {
-            // Se continúa con el borrado local.
+        // Los emails de respuesta no son identidades de SES: no hay nada que borrar allí.
+        if (($sender['type'] ?? 'sender') !== 'reply') {
+            try {
+                // Un remitente que hereda la verificación de su dominio puede no
+                // existir como identidad propia en SES: el fallo es inofensivo.
+                $this->ses()->deleteIdentity(['Identity' => $email]);
+            } catch (\Exception $e) {
+                // Se continúa con el borrado local.
+            }
         }
 
         $this->repo->delete($email);
@@ -199,8 +239,18 @@ class SenderVerificationController
             return $this->jsonResponse($response, ['error' => 'Se requiere el correo del remitente'], 400);
         }
 
-        if ($this->repo->findByEmail($email) === null) {
+        $row = $this->repo->findByEmail($email);
+        if ($row === null) {
             return $this->jsonResponse($response, ['error' => 'El remitente no existe'], 404);
+        }
+        if (($row['type'] ?? 'sender') === 'reply') {
+            $this->repo->updateStatus($email, 'Success');
+
+            return $this->jsonResponse($response, [
+                'success' => true,
+                'message' => 'Los emails de respuesta no necesitan verificación.',
+                'email'   => $email,
+            ]);
         }
 
         $emailDomain = strtolower(substr($email, strpos($email, '@') + 1));
@@ -238,6 +288,14 @@ class SenderVerificationController
 
         if (empty($email)) {
             return $this->jsonResponse($response, ['error' => 'Email address is required'], 400);
+        }
+
+        $row = $this->repo->findByEmail($email);
+        if ($row !== null && ($row['type'] ?? 'sender') === 'reply') {
+            // Reply-To: no se verifica en SES, siempre utilizable.
+            $this->repo->updateStatus($email, 'Success');
+
+            return $this->jsonResponse($response, ['email' => $email, 'verificationStatus' => 'Success']);
         }
 
         try {
@@ -303,6 +361,10 @@ class SenderVerificationController
                     ]);
 
                     foreach ($identities as $email) {
+                        $existing = $this->repo->findByEmail($email);
+                        if ($existing !== null && ($existing['type'] ?? 'sender') === 'reply') {
+                            continue; // Reply-To no depende de SES.
+                        }
                         $statusSES = $verificationAttributes['VerificationAttributes'][$email]['VerificationStatus'] ?? 'Unknown';
                         $this->repo->upsert($email, $statusSES);
                     }
@@ -340,6 +402,11 @@ class SenderVerificationController
 
         foreach ($this->repo->all() as $sender) {
             $email = $sender['email'];
+
+            // Reply-To no depende de SES: no se reconcilia contra sus identidades.
+            if (($sender['type'] ?? 'sender') === 'reply') {
+                continue;
+            }
 
             // Si SES la reconoce como identidad propia, el upsert previo ya puso
             // su estado real: no hay nada que reconciliar.

@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as api from '../services/api';
+import { refreshBalance } from '../components/BalanceGauge';
 import {
   type RecipientEntry, parseRecipients, parseRecipientsCsv, downloadCsv, PHONE_HEADERS,
 } from '../utils/csvRecipients';
@@ -157,6 +158,7 @@ const CallModule: React.FC = () => {
       toast.error(err instanceof Error ? err.message : 'Error al originar las llamadas');
     } finally {
       setSending(false);
+      refreshBalance();
     }
   };
 
@@ -178,6 +180,7 @@ const CallModule: React.FC = () => {
       toast.error(err instanceof Error ? err.message : 'Error al originar la llamada de prueba');
     } finally {
       setTestSending(false);
+      refreshBalance();
     }
   };
 

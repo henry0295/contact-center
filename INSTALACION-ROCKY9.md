@@ -786,16 +786,58 @@ Consola SNS → *Text messaging (SMS)*: sal del sandbox de SMS, fija el límite 
 
 ## 14. API de voz (módulo Llamadas)
 
-La API de voz (TTS + Asterisk) está en **192.168.101.92:8000, una IP privada**. El servidor necesita ruta de red hasta ella (misma LAN o VPN/túnel). **Sin esa ruta, el módulo Llamadas no funciona**; el resto de la app sí. En la nube, monta antes la VPN y ajusta `VOICE_API_URL`.
+La API de voz (TTS + Asterisk, `/opt/apivoz`) se publica en **`http://indoor-qvmdkkckkpc.dynamic-m.com:8000`** (valor por defecto de `VOICE_API_URL`; en la LAN también responde en `192.168.101.92:8000`).
+
+**`deploy.sh` crea solo el usuario y el token** de esta instalación:
+
+1. Si `VOICE_API_KEY` ya es válida (`GET /auth/me` = 200), no hace nada.
+2. Si hay `VOICE_API_USER`/`VOICE_API_PASSWORD` en el `.env`, recupera la key con `POST /auth/login`.
+3. Si no, pide la **clave de administrador** de la API de voz (`ADMIN_SECRET_KEY` de `/opt/apivoz/.env`), registra el usuario `contact-center-<host>-xxxx` con `POST /auth/register` y guarda `VOICE_API_KEY`, `VOICE_API_USER` y `VOICE_API_PASSWORD` en el `.env`. La clave de administrador no se guarda en ningún sitio.
+
+Con `curl ... | sudo bash` la clave se pide por la terminal (no se ve al escribir; Enter la omite). También se puede pasar sin preguntas:
 
 ```bash
-sudo dnf install -y nmap-ncat
-nc -zv 192.168.101.92 8000
-curl -sS -o /dev/null -w "%{http_code}\n" -H "X-API-Key: <VOICE_API_KEY>" \
-  http://192.168.101.92:8000/call-status/prueba
+curl -fsSL https://raw.githubusercontent.com/henry0295/contact-center/main/deploy.sh | sudo VOICE_ADMIN_KEY='<clave>' bash
+# Más tarde, si se omitió:
+sudo VOICE_ADMIN_KEY='<clave>' /var/www/contact-center/deploy.sh update
+# A mano (como el usuario de la app):
+sudo -iu contactcenter bash -c "cd /var/www/contact-center && VOICE_ADMIN_KEY='<clave>' php bin/voice-setup.php"
 ```
 
-Cualquier código HTTP indica conectividad. Esta prueba se hace como tu usuario, fuera de SELinux: si funciona aquí pero la app dice que no conecta, revisa el booleano `httpd_can_network_connect` (§3.1).
+Otra URL: `--voice-url http://host:8000`. Para no tocar la API de voz: `--no-voice`. Tras cambiar el `.env`, `sudo systemctl reload php-fpm`.
+
+Prueba de conectividad (cualquier código HTTP indica que llega):
+
+```bash
+curl -sS http://indoor-qvmdkkckkpc.dynamic-m.com:8000/        # {"status":"API OK",...}
+```
+
+Si funciona aquí pero la app dice que no conecta, revisa el booleano SELinux `httpd_can_network_connect` (§3.1).
+
+### 14.1 Saldo (créditos) y precios
+
+Cada envío se descuenta de un saldo prepago en pesos: **SMS $27, email $20, llamada de voz $75** (valores iniciales). Reglas:
+
+- Antes de enviar se comprueba que el saldo cubra todo el lote; si no, el envío se rechaza (HTTP 402).
+- Se cobra por mensaje enviado y por llamada originada (aunque no contesten). Si un envío falla, se reembolsa. Si el saldo se acaba a mitad de una campaña programada, el resto se marca "Saldo insuficiente" y no se cobra.
+- El saldo se ve en la barra superior. **Los precios nunca llegan al navegador** y **no hay ninguna pantalla ni endpoint para recargar**: solo por consola.
+
+```bash
+APP=/var/www/contact-center
+sudo -u nginx php $APP/bin/credits.php recharge 100000 --note="Factura 123"
+sudo -u nginx php $APP/bin/credits.php balance
+sudo -u nginx php $APP/bin/credits.php history --limit=20
+sudo -u nginx php $APP/bin/credits.php usage --since=2026-10-01
+sudo -u nginx php $APP/bin/credits.php prices
+sudo -u nginx php $APP/bin/credits.php set-price sms 27      # sms | email | call
+sudo -u nginx php $APP/bin/credits.php adjust -5000 --note="Corrección"
+```
+
+(En Debian/Ubuntu el usuario es `www-data`.) Los valores van sin puntos de miles (`100000`, no `100.000`).
+
+### 14.2 Emails de respuesta (Reply-To)
+
+En **Verificación → Email de respuesta** se pueden agregar varias direcciones (de cualquier dominio; no necesitan verificación en SES porque solo van en la cabecera Reply-To). En el **módulo Email** hay un selector para elegir cuál usar en cada envío, o "Sin email de respuesta". Las campañas programadas conservan la elección.
 
 ---
 

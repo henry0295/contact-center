@@ -7,6 +7,7 @@ use App\Repositories\CampaignRepository;
 use App\Repositories\ContactListRepository;
 use App\Repositories\ContactRepository;
 use App\Repositories\JobRepository;
+use App\Repositories\SenderRepository;
 use App\Support\Attachments;
 use App\Support\Logger;
 use App\Support\Sms;
@@ -44,6 +45,8 @@ class SendOrchestrator
     private ContactRepository $contacts;
     private JobRepository $jobs;
     private CampaignService $service;
+    private CreditService $credits;
+    private SenderRepository $senders;
 
     public function __construct(
         ?CampaignRepository $campaigns = null,
@@ -51,7 +54,9 @@ class SendOrchestrator
         ?ContactListRepository $lists = null,
         ?ContactRepository $contacts = null,
         ?JobRepository $jobs = null,
-        ?CampaignService $service = null
+        ?CampaignService $service = null,
+        ?CreditService $credits = null,
+        ?SenderRepository $senders = null
     ) {
         $this->campaigns = $campaigns ?? new CampaignRepository();
         $this->recipients = $recipients ?? new CampaignRecipientRepository();
@@ -59,6 +64,8 @@ class SendOrchestrator
         $this->contacts = $contacts ?? new ContactRepository();
         $this->jobs = $jobs ?? new JobRepository();
         $this->service = $service ?? new CampaignService();
+        $this->credits = $credits ?? new CreditService();
+        $this->senders = $senders ?? new SenderRepository();
     }
 
     /**
@@ -135,20 +142,20 @@ class SendOrchestrator
         }
 
         $segments = $channel === 'sms' ? max(1, Sms::segments($body)) : 1;
-        // El coste solo se estima en SMS (el email de SES y la llamada de voz
-        // no se facturan por segmento aquí), pero se devuelve la misma forma
-        // para que la interfaz no tenga que distinguir.
-        $cost = $channel === 'sms'
-            ? Sms::estimateCost($segments, count($recipients))
-            : [
-                'segmentsPerMessage' => 1,
-                'recipients'         => count($recipients),
-                'totalSegments'      => count($recipients),
-                'pricePerSegment'    => 0.0,
-                'currency'           => '',
-                'total'              => 0.0,
-                'configured'         => false,
-            ];
+        // Solo volumen (segmentos/destinatarios): los precios son internos y
+        // no se devuelven al cliente.
+        $cost = Sms::estimateCost($segments, count($recipients));
+
+        // Saldo: el lote completo debe estar cubierto ANTES de registrar nada.
+        // El cobro real se hace por envío en CampaignService (si un envío
+        // falla, no se cobra). Lanza InsufficientCreditException (400/402).
+        $this->credits->assertCanAfford($channel, count($recipients));
+
+        // Email de respuesta elegido en el compositor (solo email):
+        //   null  -> el de respuesta por defecto (si hay)
+        //   ''    -> sin Reply-To
+        //   email -> debe ser uno de los emails de respuesta registrados.
+        $replyTo = $channel === 'email' ? $this->resolveReplyTo($input['replyTo'] ?? null) : null;
 
         $name = trim((string) ($input['name'] ?? ''));
         if ($name === '') {
@@ -168,9 +175,10 @@ class SendOrchestrator
             'expiresAt'       => $expiresAt,
             'tags'            => $input['tags'] ?? null,
             'segments'        => $segments,
-            'costEstimate'    => $cost['total'] ?? null,
+            'costEstimate'    => null,
             'origin'          => $input['origin'] ?? 'direct',
             'voiceGender'     => $channel === 'call' ? (($input['voiceGender'] ?? 'F') === 'M' ? 'M' : 'F') : null,
+            'replyTo'         => $replyTo,
         ]);
 
         $this->recipients->addMany($campaignId, $recipients);
@@ -232,6 +240,34 @@ class SendOrchestrator
                 ? 'Enviado a ' . $result['sent'] . ' destinatario(s).'
                 : $result['sent'] . ' enviado(s) y ' . $result['failed'] . ' fallido(s).',
         ];
+    }
+
+    /**
+     * Valida el email de respuesta pedido. Solo se aceptan direcciones
+     * registradas como "email de respuesta" (Verificación), para que nadie
+     * pueda inyectar un Reply-To arbitrario por la API.
+     */
+    private function resolveReplyTo(mixed $value): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+        $value = trim((string) $value);
+        if ($value === '' || $value === 'none') {
+            return '';
+        }
+        if ($value === 'default') {
+            return null;
+        }
+
+        $row = $this->senders->findByEmail($value);
+        if ($row === null || ($row['type'] ?? 'sender') !== 'reply') {
+            throw new \InvalidArgumentException(
+                'El email de respuesta ' . $value . ' no está registrado. Agrégalo en Verificación > Email de respuesta.'
+            );
+        }
+
+        return (string) $row['email'];
     }
 
     /** Nombre automático con el formato del compositor: SMS-2026-10-06-17:10:49 */

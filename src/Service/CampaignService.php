@@ -28,6 +28,11 @@ class CampaignService
     private ContactRepository $contacts;
     private ?VoiceCallService $voiceCall;
 
+    /** Error registrado en los destinatarios que no se enviaron por falta de saldo. */
+    public const NO_CREDIT_ERROR = 'Saldo insuficiente: no se envió. Recarga y vuelve a enviar.';
+
+    private ?CreditService $creditService;
+
     /** Caché de contactos dentro de un mismo proceso de campaña. */
     private array $contactCache = [];
 
@@ -38,8 +43,10 @@ class CampaignService
         ?SmsService $sms = null,
         ?MessageRepository $messages = null,
         ?ContactRepository $contacts = null,
-        ?VoiceCallService $voiceCall = null
+        ?VoiceCallService $voiceCall = null,
+        ?CreditService $credits = null
     ) {
+        $this->creditService = $credits;
         $this->campaigns = $campaigns ?? new CampaignRepository();
         $this->recipients = $recipients ?? new CampaignRecipientRepository();
         $this->email = $email ?? new EmailService();
@@ -82,8 +89,18 @@ class CampaignService
         $failed = 0;
         $skipped = 0;
         $isFirst = true;
+        $outOfCredit = false;
+        // null = Reply-To por defecto; '' = ninguno; email = el elegido.
+        $replyTo = array_key_exists('reply_to', $campaign) ? $campaign['reply_to'] : null;
 
         foreach ($this->recipients->pending($id) as $r) {
+            // Sin saldo: los destinatarios restantes no se envían ni se cobran.
+            if ($outOfCredit) {
+                $this->recipients->markFailed((int) $r['id'], self::NO_CREDIT_ERROR);
+                $failed++;
+                continue;
+            }
+
             $target = $channel === 'email' ? ($r['email'] ?? '') : ($r['phone'] ?? '');
 
             if ($target === null || trim((string) $target) === '') {
@@ -117,9 +134,19 @@ class CampaignService
             }
             $isFirst = false;
 
+            // Cobro por envío, ANTES de enviar (atómico; ver CreditService).
+            // Si el envío falla después, se reembolsa.
+            if (!$this->credits()->debit($channel, $id, (string) $target)) {
+                $outOfCredit = true;
+                $this->recipients->markFailed((int) $r['id'], self::NO_CREDIT_ERROR);
+                $this->messages->log($channel, (string) $target, $channel === 'email' ? $personalSubject : null, 'Failed', self::NO_CREDIT_ERROR, $id);
+                $failed++;
+                continue;
+            }
+
             try {
                 if ($channel === 'email') {
-                    $this->email->send($target, $personalSubject, $personalBody, null, $attachments);
+                    $this->email->send($target, $personalSubject, $personalBody, null, $attachments, $replyTo);
                     $this->recipients->markSent((int) $r['id']);
                     $this->messages->log($channel, $target, $personalSubject, 'Sent', null, $id);
                     $sent++;
@@ -140,6 +167,16 @@ class CampaignService
                     $sent++;
                 }
             } catch (\Throwable $e) {
+                // No salió: se devuelve lo cobrado.
+                try {
+                    $this->credits()->refund($channel, $id, (string) $target, 'Envío fallido');
+                } catch (\Throwable $refundError) {
+                    \App\Support\Logger::app()->error('No se pudo reembolsar un envío fallido', [
+                        'campaignId' => $id,
+                        'to'         => $target,
+                        'error'      => $refundError->getMessage(),
+                    ]);
+                }
                 $this->recipients->markFailed((int) $r['id'], $e->getMessage());
                 $this->messages->log($channel, $target, $channel === 'email' ? $personalSubject : null, 'Failed', $e->getMessage(), $id);
                 $failed++;
@@ -226,6 +263,11 @@ class CampaignService
     private function voice(): VoiceCallService
     {
         return $this->voiceCall ??= new VoiceCallService();
+    }
+
+    private function credits(): CreditService
+    {
+        return $this->creditService ??= new CreditService();
     }
 
     /** Variables propias de este destinatario (columnas extra del CSV), si las hay. */

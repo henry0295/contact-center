@@ -289,7 +289,9 @@ const Verification: React.FC = () => {
     }
     setSubmittingReply(true);
     try {
-      const res = await verifySender({ email, type: 'reply', setAsDefault: true });
+      // El primero queda como predeterminado automáticamente; los demás se
+      // eligen por envío en el módulo de Email (o con "Usar por defecto").
+      const res = await verifySender({ email, type: 'reply' });
       toast.success(res.message);
       setReplyEmail('');
       await loadReplySenders();
@@ -688,11 +690,12 @@ const Verification: React.FC = () => {
 
               <form onSubmit={handleVerifyReply} className="space-y-2">
                 <label htmlFor="replyEmail" className="block text-sm font-medium text-gray-700">
-                  Verificar un email de respuesta
+                  Agregar un email de respuesta
                 </label>
                 <p className="text-xs text-gray-500">
-                  Puede ser cualquier dirección (de un dominio tuyo o no). Se le envía un correo de
-                  confirmación que su dueño debe aceptar.
+                  Puedes agregar varios y elegir cuál usar en cada envío desde el módulo de Email.
+                  Puede ser cualquier dirección (de tu dominio o no) y no necesita verificación: solo
+                  se usa en la cabecera Reply-To.
                 </p>
                 <div className="flex flex-col sm:flex-row gap-3">
                   <input
@@ -709,7 +712,7 @@ const Verification: React.FC = () => {
                     className="shrink-0 inline-flex justify-center items-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
                   >
                     <Reply className="-ml-1 mr-2 h-4 w-4" />
-                    {submittingReply ? 'Enviando...' : 'Verificar email de respuesta'}
+                    {submittingReply ? 'Guardando...' : 'Agregar email de respuesta'}
                   </button>
                 </div>
               </form>

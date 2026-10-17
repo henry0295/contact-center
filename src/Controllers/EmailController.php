@@ -91,7 +91,13 @@ class EmailController
                 'templateId'   => $data['templateId'] ?? null,
                 'origin'       => $origin,
                 'attachments'  => $attachments,
+                // Ausente = email de respuesta por defecto; 'none' = ninguno.
+                'replyTo'      => array_key_exists('replyTo', $data) ? $data['replyTo'] : null,
             ]);
+        } catch (\App\Service\InsufficientCreditException $e) {
+            Attachments::cleanup($attachments);
+
+            return $this->jsonResponse($response, ['error' => $e->getMessage(), 'code' => 'insufficient_credit'], 402);
         } catch (\InvalidArgumentException $e) {
             Attachments::cleanup($attachments);
 

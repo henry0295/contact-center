@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Send, Loader2, Users, Tag, Clock, CalendarX, FileText, Trash2,
-  History, DollarSign, TestTube2, ChevronDown, Smartphone, Sparkles, Download,
+  History, TestTube2, ChevronDown, Smartphone, Sparkles, Download,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as api from '../services/api';
+import { refreshBalance } from '../components/BalanceGauge';
 import {
   type RecipientEntry, parseRecipients, parseRecipientsCsv, downloadCsv, PHONE_HEADERS,
 } from '../utils/csvRecipients';
@@ -220,6 +221,7 @@ const SMSModule: React.FC = () => {
       toast.error(err instanceof Error ? err.message : 'Error al enviar');
     } finally {
       setSending(false);
+      refreshBalance();
     }
   };
 
@@ -245,6 +247,7 @@ const SMSModule: React.FC = () => {
       toast.error(err instanceof Error ? err.message : 'Error al enviar la prueba');
     } finally {
       setTestSending(false);
+      refreshBalance();
     }
   };
 
@@ -621,7 +624,7 @@ const SMSModule: React.FC = () => {
 
               <div className="rounded-lg border border-gray-200 p-4">
                 <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-gray-700">
-                  <DollarSign className="h-4 w-4 text-gray-400" /> Coste estimado
+                  <Users className="h-4 w-4 text-gray-400" /> Resumen del envío
                 </h3>
                 {cost ? (
                   <dl className="space-y-1.5 text-sm">
@@ -633,20 +636,12 @@ const SMSModule: React.FC = () => {
                       <dt className="text-gray-500">Segmentos totales</dt>
                       <dd className="font-medium text-gray-900">{cost.totalSegments}</dd>
                     </div>
-                    <div className="flex justify-between border-t border-gray-100 pt-1.5">
-                      <dt className="text-gray-500">Total estimado</dt>
-                      <dd className="font-semibold text-gray-900">
-                        {cost.configured ? `${cost.total.toFixed(4)} ${cost.currency}` : 'Sin configurar'}
-                      </dd>
-                    </div>
-                    {!cost.configured && (
-                      <p className="pt-1 text-xs text-gray-400">
-                        Define SMS_PRICE_PER_SEGMENT en el .env para ver un importe real.
-                      </p>
-                    )}
+                    <p className="pt-1 text-xs text-gray-400">
+                      Cada SMS enviado se descuenta del saldo que ves en la barra superior.
+                    </p>
                   </dl>
                 ) : (
-                  <p className="text-sm text-gray-400">Escribe el mensaje para estimar el coste.</p>
+                  <p className="text-sm text-gray-400">Escribe el mensaje para ver el resumen.</p>
                 )}
               </div>
             </div>

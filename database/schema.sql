@@ -308,3 +308,64 @@ ALTER TABLE `campaign_recipients` ADD INDEX IF NOT EXISTS `idx_cr_call_id` (`cal
 
 -- Voz a usar en la locución (F=femenina, M=masculina). Solo aplica a 'call'.
 ALTER TABLE `campaigns` ADD COLUMN IF NOT EXISTS `voice_gender` CHAR(1) NULL DEFAULT 'F';
+
+-- =====================================================================
+-- Email de respuesta elegido en el compositor. NULL = usar el de respuesta
+-- por defecto (comportamiento anterior); '' = sin Reply-To (las respuestas
+-- van al remitente); una dirección = esa dirección.
+-- =====================================================================
+ALTER TABLE `campaigns` ADD COLUMN IF NOT EXISTS `reply_to` VARCHAR(255) NULL;
+
+-- =====================================================================
+-- Créditos (saldo prepago en pesos colombianos).
+--
+-- * El saldo SOLO se recarga por consola: bin/credits.php. Ningún endpoint
+--   HTTP lo modifica, salvo el descuento automático de cada envío.
+-- * Los precios por canal viven aquí y nunca se envían al frontend.
+-- * Cada movimiento queda en credit_transactions (libro mayor).
+-- =====================================================================
+
+-- Una sola fila (id = 1). gauge_reference = saldo justo después de la última
+-- recarga: el medidor de la barra superior muestra el saldo relativo a ella.
+CREATE TABLE IF NOT EXISTS `credit_account` (
+    `id` TINYINT UNSIGNED NOT NULL,
+    `balance` DECIMAL(14,2) NOT NULL DEFAULT 0,
+    `gauge_reference` DECIMAL(14,2) NOT NULL DEFAULT 0,
+    `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+INSERT IGNORE INTO `credit_account` (`id`, `balance`, `gauge_reference`) VALUES (1, 0, 0);
+
+-- Precio unitario por canal (pesos). Se cambian con: bin/credits.php set-price
+CREATE TABLE IF NOT EXISTS `credit_prices` (
+    `channel` VARCHAR(16) NOT NULL,
+    `price` DECIMAL(10,2) NOT NULL,
+    `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`channel`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Valores iniciales; INSERT IGNORE no pisa precios ya cambiados por consola.
+INSERT IGNORE INTO `credit_prices` (`channel`, `price`) VALUES
+    ('sms', 27.00),
+    ('email', 20.00),
+    ('call', 75.00);
+
+-- Libro de movimientos. type: recharge | debit | refund | adjust.
+-- amount es positivo para recarga/reembolso y negativo para débito.
+CREATE TABLE IF NOT EXISTS `credit_transactions` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `type` VARCHAR(16) NOT NULL,
+    `channel` VARCHAR(16) NULL,
+    `quantity` INT NOT NULL DEFAULT 1,
+    `amount` DECIMAL(14,2) NOT NULL,
+    `balance_after` DECIMAL(14,2) NOT NULL,
+    `campaign_id` INT UNSIGNED NULL,
+    `recipient` VARCHAR(255) NULL,
+    `note` VARCHAR(255) NULL,
+    `actor` VARCHAR(64) NULL,
+    `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    KEY `idx_ct_type_time` (`type`, `created_at`),
+    KEY `idx_ct_campaign` (`campaign_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

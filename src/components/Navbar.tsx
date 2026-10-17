@@ -2,6 +2,7 @@ import React from 'react';
 import { Menu, X, User, LogOut } from 'lucide-react';
 import { useSidebar } from '../context/SidebarContext';
 import { useUser } from '../context/UserContext';
+import BalanceGauge from './BalanceGauge';
 
 const Navbar: React.FC = () => {
   const { isSidebarOpen, toggleSidebar } = useSidebar();
@@ -32,6 +33,7 @@ const Navbar: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-4">
+          <BalanceGauge />
           <div className="relative">
             <button
               onClick={toggleDropdown}

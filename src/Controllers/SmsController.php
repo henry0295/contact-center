@@ -49,7 +49,8 @@ class SmsController
                 'origin'       => 'direct',
             ]);
         } catch (\InvalidArgumentException $e) {
-            return $this->jsonResponse($response, ['error' => $e->getMessage()], 400);
+            // 402 = saldo insuficiente (InsufficientCreditException).
+            return $this->jsonResponse($response, ['error' => $e->getMessage()], $e instanceof \App\Service\InsufficientCreditException ? 402 : 400);
         } catch (\Throwable $e) {
             return $this->jsonResponse($response, [
                 'error'   => 'No se pudo registrar el envío',
@@ -99,7 +100,8 @@ class SmsController
                 'origin'     => 'test',
             ]);
         } catch (\InvalidArgumentException $e) {
-            return $this->jsonResponse($response, ['error' => $e->getMessage()], 400);
+            // 402 = saldo insuficiente (InsufficientCreditException).
+            return $this->jsonResponse($response, ['error' => $e->getMessage()], $e instanceof \App\Service\InsufficientCreditException ? 402 : 400);
         } catch (\Throwable $e) {
             return $this->jsonResponse($response, [
                 'error'   => 'No se pudo enviar la prueba',

@@ -173,6 +173,12 @@ Si no ejecutas el dispatcher, el "enviar ahora" sigue funcionando, pero las camp
 
 > Nota sobre volumen: el "enviar ahora" procesa los destinatarios de forma síncrona dentro de la petición. Para envíos muy grandes conviene crear la campaña como programada y dejar que el dispatcher la procese en segundo plano.
 
+## 8c. Saldo (créditos), emails de respuesta y API de voz
+
+- **Saldo:** cada envío descuenta saldo prepago (SMS $27, email $20, llamada $75 por defecto, en la tabla `credit_prices`). Los precios no se envían nunca al frontend y **solo se recarga por consola**: `php bin/credits.php recharge 100000`, `balance`, `history`, `usage`, `prices`, `set-price sms 27` (alias `composer credits -- <comando>`).
+- **Emails de respuesta:** varios, en Verificación → Email de respuesta (no requieren verificación SES). Se eligen por envío en el módulo Email.
+- **API de voz:** `php bin/voice-setup.php` con la variable `VOICE_ADMIN_KEY` crea el usuario de esta instalación en la API de voz y guarda `VOICE_API_KEY` en el `.env` (por defecto `VOICE_API_URL=http://indoor-qvmdkkckkpc.dynamic-m.com:8000`). En Linux lo hace `deploy.sh`.
+
 ## 9. Seguridad
 
 - No versiones secretos. `.env.example` y el `.env` entregado conservan las claves AWS y los secretos vacíos.

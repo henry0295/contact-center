@@ -101,10 +101,10 @@ class CampaignRepository
         $stmt = $this->pdo->prepare(
             'INSERT INTO campaigns
                 (name, channel, template_id, subject, body, status, scheduled_at, total_recipients,
-                 sender_id, expires_at, tags, segments, cost_estimate, origin, voice_gender)
+                 sender_id, expires_at, tags, segments, cost_estimate, origin, voice_gender, reply_to)
              VALUES
                 (:name, :channel, :template_id, :subject, :body, :status, :scheduled_at, :total,
-                 :sender_id, :expires_at, :tags, :segments, :cost, :origin, :voice_gender)'
+                 :sender_id, :expires_at, :tags, :segments, :cost, :origin, :voice_gender, :reply_to)'
         );
 
         $nullable = static fn ($v): int => $v === null ? PDO::PARAM_NULL : PDO::PARAM_STR;
@@ -124,6 +124,7 @@ class CampaignRepository
         $stmt->bindValue(':cost', $data['costEstimate'] ?? null, $nullable($data['costEstimate'] ?? null));
         $stmt->bindValue(':origin', $data['origin'] ?? 'campaign', PDO::PARAM_STR);
         $stmt->bindValue(':voice_gender', $data['voiceGender'] ?? null, $nullable($data['voiceGender'] ?? null));
+        $stmt->bindValue(':reply_to', $data['replyTo'] ?? null, $nullable($data['replyTo'] ?? null));
         $stmt->execute();
 
         return (int) $this->pdo->lastInsertId();

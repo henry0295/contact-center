@@ -158,24 +158,22 @@ class Sms
     }
 
     /**
-     * Coste estimado. El precio por segmento varía mucho según el país, así que
-     * se toma de SMS_PRICE_PER_SEGMENT del .env y se presenta como ESTIMACIÓN:
-     * el importe real lo factura AWS según el destino.
+     * Resumen de volumen del envío (segmentos y destinatarios).
+     *
+     * Ya NO incluye importes: los precios son internos (tabla credit_prices,
+     * ver CreditService) y el cliente no debe verlos. Se conservan las claves
+     * de precio a 0 para no romper a los clientes de la API.
      */
     public static function estimateCost(int $segments, int $recipients): array
     {
-        $price = (float) ($_ENV['SMS_PRICE_PER_SEGMENT'] ?? 0);
-        $currency = $_ENV['SMS_PRICE_CURRENCY'] ?? 'USD';
-        $totalSegments = $segments * $recipients;
-
         return [
             'segmentsPerMessage' => $segments,
             'recipients'         => $recipients,
-            'totalSegments'      => $totalSegments,
-            'pricePerSegment'    => $price,
-            'currency'           => $currency,
-            'total'              => round($totalSegments * $price, 4),
-            'configured'         => $price > 0,
+            'totalSegments'      => $segments * $recipients,
+            'pricePerSegment'    => 0.0,
+            'currency'           => '',
+            'total'              => 0.0,
+            'configured'         => false,
         ];
     }
 
