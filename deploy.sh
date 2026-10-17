@@ -6,24 +6,34 @@
 # Distros: Rocky / AlmaLinux / RHEL / CentOS Stream 8-10, Fedora,
 #          Debian 11+ y Ubuntu 22.04+.
 #
-# Uso:
-#   sudo ./deploy.sh install --host 192.168.101.95
-#   sudo ./deploy.sh install --host 192.168.101.95 --https self-signed
-#   sudo ./deploy.sh install --host cc.midominio.com --https letsencrypt --email yo@midominio.com
-#   sudo ./deploy.sh install --host 10.0.0.5 --repo https://github.com/<usuario>/<repo>.git
-#   sudo ./deploy.sh update
+# Instalación en una línea (lo primero que hace es clonar el repositorio):
+#   curl -fsSL https://raw.githubusercontent.com/henry0295/contact-center/main/deploy.sh | sudo bash
+#
+# Otras formas:
+#   sudo bash deploy.sh                          # install con la IP detectada
+#   sudo bash deploy.sh install --host 192.168.101.95 --https self-signed
+#   sudo bash deploy.sh install --host cc.midominio.com --https letsencrypt --email yo@midominio.com
+#   curl -fsSL <url>/deploy.sh | sudo bash -s -- --https self-signed
+#   sudo /var/www/contact-center/deploy.sh update
 #
 # "install" es idempotente: se puede repetir sin perder datos (.env, BD,
-# uploads). "update" trae el código nuevo, reinstala dependencias, aplica el
-# esquema, recompila el frontend y recarga los servicios.
+# uploads). Si la carpeta ya tenía una instalación sin git, se mueve a
+# <carpeta>.bak-<fecha> y se conservan su .env, storage/ y public/uploads/.
+# "update" hace git pull, reinstala dependencias, aplica el esquema,
+# recompila el frontend y recarga los servicios.
 # =============================================================================
 set -Eeuo pipefail
+
+# Todo el script va dentro de cc_main(): con "curl ... | sudo bash" bash lo
+# lee completo antes de ejecutar nada, y los comandos hijos (ssh, apt, npm)
+# no pueden consumir por error el resto del script desde stdin.
+cc_main() {
 
 # ----------------------------------------------------------------- defaults --
 APP_USER=contactcenter
 APP_DIR=/var/www/contact-center
-REPO_URL=""
-BRANCH=""
+REPO_URL="https://github.com/henry0295/contact-center.git"
+BRANCH="main"
 HOST=""
 HTTPS_MODE=none          # none | self-signed | letsencrypt
 LE_EMAIL=""
@@ -41,14 +51,17 @@ die()  { printf '\033[1;31m[error] %s\033[0m\n' "$*" >&2; exit 1; }
 trap 'die "Falló la línea $LINENO: $BASH_COMMAND"' ERR
 
 usage() {
-  sed -n '2,21p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  if [[ -f "${BASH_SOURCE[0]:-}" ]]; then
+    sed -n '3,/^# ====/p' "${BASH_SOURCE[0]}" | sed '$d; s/^# \{0,1\}//'
+  fi
   cat <<'EOF'
 Opciones:
-  --host <IP|dominio>     Dirección pública del sitio (obligatoria en install).
+  --host <IP|dominio>     Dirección del sitio (por defecto, la IP principal del servidor).
   --https <modo>          none (por defecto) | self-signed | letsencrypt.
   --email <correo>        Correo para Let's Encrypt (obligatorio con letsencrypt).
-  --repo <url>            Repositorio git a clonar si el código aún no está en --dir.
-  --branch <rama>         Rama a clonar/actualizar.
+  --repo <url>            Repositorio git (por defecto git@github.com:henry0295/contact-center.git).
+                          Con una URL https:// pública no hace falta deploy key.
+  --branch <rama>         Rama a clonar/actualizar (por defecto main).
   --dir <ruta>            Carpeta de la aplicación (por defecto /var/www/contact-center).
   --timezone <zona>       Zona horaria del sistema, p.ej. America/Bogota.
   --admin-email <correo>  Correo del administrador inicial.
@@ -59,27 +72,33 @@ EOF
 # ------------------------------------------------- re-ejecución desde /tmp ---
 # git pull puede reescribir este archivo mientras bash lo lee: se ejecuta una
 # copia en /tmp.
-if [[ -z "${CC_DEPLOY_REEXEC:-}" ]]; then
-  SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# (Si llega por tubería, "curl ... | sudo bash", no hay archivo que copiar ni
+# riesgo: bash ya lo está leyendo de stdin.)
+if [[ -z "${CC_DEPLOY_REEXEC:-}" && -f "${BASH_SOURCE[0]:-}" ]]; then
   TMP_SELF="$(mktemp /tmp/cc-deploy.XXXXXX)"
   cp "${BASH_SOURCE[0]}" "$TMP_SELF"
-  CC_DEPLOY_REEXEC=1 CC_DEPLOY_SRC="$SELF_DIR" exec bash "$TMP_SELF" "$@"
+  CC_DEPLOY_REEXEC=1 exec bash "$TMP_SELF" "$@"
 fi
-SCRIPT_DIR="${CC_DEPLOY_SRC}"
-SELF_TMP="${BASH_SOURCE[0]}"
-trap 'rm -f "$SELF_TMP"' EXIT
+if [[ -n "${CC_DEPLOY_REEXEC:-}" ]]; then
+  SELF_TMP="${BASH_SOURCE[0]}"
+  trap 'rm -f "$SELF_TMP"' EXIT
+fi
 # sudo en RHEL no incluye /usr/local/bin (Node y Composer se instalan ahí).
 export PATH="/usr/local/bin:$PATH"
 
 # --------------------------------------------------------------- argumentos --
-CMD="${1:-}"
-[[ $# -gt 0 ]] && shift
+# Sin comando = install (así basta con "sudo bash deploy.sh").
+CMD=install
+if [[ $# -gt 0 && "$1" != --* && "$1" != -h ]]; then CMD="$1"; shift; fi
 case "$CMD" in
   install|update) ;;
-  -h|--help|help|"") usage; exit 0 ;;
+  help) usage; exit 0 ;;
   *) usage; die "Comando desconocido: $CMD" ;;
 esac
 
+for _a in "$@"; do
+  if [[ "$_a" == -h || "$_a" == --help ]]; then usage; exit 0; fi
+done
 [[ $EUID -eq 0 ]] || die "Ejecuta el script con sudo o como root."
 
 # Ajustes guardados por una instalación previa (update los reutiliza).
@@ -106,8 +125,12 @@ done
 [[ "$APP_DIR" =~ ^/[A-Za-z0-9._/-]+$ && "$APP_DIR" != "/" ]] || die "--dir no válido: $APP_DIR"
 APP_DIR="${APP_DIR%/}"
 [[ "$HTTPS_MODE" =~ ^(none|self-signed|letsencrypt)$ ]] || die "--https debe ser none, self-signed o letsencrypt"
-if [[ "$CMD" == install ]]; then
-  [[ -n "$HOST" ]] || die "install necesita --host <IP o dominio>"
+if [[ "$CMD" == install && -z "$HOST" ]]; then
+  # Sin --host: IP principal del servidor (la de la ruta por defecto).
+  HOST="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i=1; i<NF; i++) if ($i == "src") {print $(i+1); exit}}')"
+  [[ -n "$HOST" ]] || HOST="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  [[ -n "$HOST" ]] || die "No se pudo detectar la IP del servidor; usa --host <IP o dominio>"
+  printf 'Usando la IP detectada: %s (cámbiala con --host)\n' "$HOST"
 fi
 if [[ -n "$HOST" ]]; then
   [[ "$HOST" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] || die "--host no válido: $HOST"
@@ -334,45 +357,132 @@ EOF
 
 # ------------------------------------------------------- usuario y código ----
 setup_user_and_dir() {
-  log "Usuario $APP_USER y carpeta $APP_DIR"
+  log "Permisos de $APP_DIR para $APP_USER y $WEB_USER"
   id "$APP_USER" >/dev/null 2>&1 || useradd -m -s /bin/bash "$APP_USER"
   usermod -aG "$WEB_USER" "$APP_USER"
-  mkdir -p "$APP_DIR"
-  chown "$APP_USER:$WEB_USER" "$APP_DIR"
+  chown -R "$APP_USER:$WEB_USER" "$APP_DIR"
   chmod 750 "$APP_DIR"
 }
 
-fetch_code() {
-  log "Obteniendo el código"
-  if [[ -d "$APP_DIR/.git" ]]; then
-    chown -R "$APP_USER:$WEB_USER" "$APP_DIR"
-    if [[ -n "$BRANCH" ]]; then
-      as_app "git -C '$APP_DIR' fetch --prune origin && git -C '$APP_DIR' checkout '$BRANCH'"
-    fi
-    if ! as_app "git -C '$APP_DIR' pull --ff-only"; then
-      # Repos privados: el usuario $APP_USER necesita credenciales (deploy key o token).
-      [[ "$CMD" == install ]] || die "git pull falló. Configura credenciales de git para $APP_USER (ver README)."
-      warn "git pull falló; se usa el código que ya hay en $APP_DIR"
-    fi
-    ok "git: $(as_app "git -C '$APP_DIR' log -1 --format='%h %s'")"
-  elif [[ -n "$REPO_URL" ]]; then
-    if [[ -n "$(ls -A "$APP_DIR" 2>/dev/null)" ]]; then
-      die "$APP_DIR no está vacío y no es un repositorio git; vacíalo o usa otra --dir"
-    fi
-    as_app "git clone ${BRANCH:+--branch '$BRANCH'} '$REPO_URL' '$APP_DIR'"
-  elif [[ "$SCRIPT_DIR" != "$APP_DIR" && -f "$SCRIPT_DIR/composer.json" ]]; then
-    ok "Copiando desde $SCRIPT_DIR"
-    rsync -a \
-      --exclude '.git/' --exclude 'node_modules/' --exclude 'vendor/' --exclude 'dist/' \
-      --exclude '/.env' --exclude '/.env.bak' --exclude '/storage/' --exclude '/public/uploads/' \
-      --exclude '.agents/' --exclude '.bolt/' \
-      "$SCRIPT_DIR/" "$APP_DIR/"
-  elif [[ -f "$APP_DIR/composer.json" ]]; then
-    ok "El código ya está en $APP_DIR"
+# Paso 0 de install: git + ssh y el usuario de la app, antes de cualquier
+# otra cosa, para poder clonar.
+bootstrap_git() {
+  log "Paso 1: git, ssh y usuario $APP_USER"
+  if [[ "$FAMILY" == rhel ]]; then
+    dnf -y install git openssh-clients curl tar rsync
   else
-    die "No hay código en $APP_DIR. Usa --repo <url> o ejecuta el script desde una copia del proyecto."
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -y
+    apt-get install -y git openssh-client curl ca-certificates tar rsync
+  fi
+  id "$APP_USER" >/dev/null 2>&1 || useradd -m -s /bin/bash "$APP_USER"
+}
+
+is_ssh_url() { [[ "$REPO_URL" == git@* || "$REPO_URL" == ssh://* ]]; }
+
+# Huella oficial de la clave ed25519 de github.com (docs.github.com,
+# "GitHub's SSH key fingerprints").
+GITHUB_ED25519_FP="SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU"
+
+# Deploy key SSH para el usuario de la app (repos privados).
+ensure_repo_access() {
+  if as_app "GIT_TERMINAL_PROMPT=0 git ls-remote '$REPO_URL' >/dev/null 2>&1"; then
+    ok "Acceso al repositorio OK ($REPO_URL)"
+    return 0
+  fi
+  if ! is_ssh_url; then
+    # Repo privado en GitHub: se pasa a SSH con deploy key.
+    if [[ "$REPO_URL" =~ ^https://github\.com/([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)$ ]]; then
+      REPO_URL="git@github.com:${BASH_REMATCH[1]%.git}.git"
+      warn "No hay acceso público al repositorio; se usará SSH con deploy key ($REPO_URL)"
+    else
+      die "No se puede leer $REPO_URL (¿URL correcta? ¿repo privado?). Para privados usa git@github.com:..."
+    fi
+  fi
+
+  local home key known
+  home="$(getent passwd "$APP_USER" | cut -d: -f6)"
+  key="$home/.ssh/id_ed25519"
+  known="$home/.ssh/known_hosts"
+  install -d -m 700 -o "$APP_USER" -g "$APP_USER" "$home/.ssh"
+
+  if [[ "$REPO_URL" == *github.com* ]] && ! grep -q '^github.com ' "$known" 2>/dev/null; then
+    local tmpk
+    tmpk="$(mktemp)"
+    ssh-keyscan -t ed25519 github.com > "$tmpk" 2>/dev/null
+    [[ "$(ssh-keygen -lf "$tmpk" | awk '{print $2}')" == "$GITHUB_ED25519_FP" ]] \
+      || { rm -f "$tmpk"; die "La huella SSH de github.com no coincide con la oficial; se aborta."; }
+    cat "$tmpk" >> "$known"
+    rm -f "$tmpk"
+    chown "$APP_USER:$APP_USER" "$known"
+    chmod 644 "$known"
+  fi
+
+  if [[ ! -f "$key" ]]; then
+    as_app "ssh-keygen -q -t ed25519 -N '' -C 'contact-center deploy $(hostname)' -f ~/.ssh/id_ed25519"
+  fi
+
+  local repo_path="${REPO_URL#*github.com}"
+  repo_path="${repo_path#[:/]}"
+  repo_path="${repo_path%.git}"
+  while true; do
+    cat <<EOF
+
+-----------------------------------------------------------------------------
+ El repositorio es privado: agrega esta clave como *Deploy key* (solo lectura)
+   https://github.com/${repo_path}/settings/keys/new
+   Title: $(hostname)   |   NO marques "Allow write access"
+
+$(cat "$key.pub")
+-----------------------------------------------------------------------------
+EOF
+    if ! { : </dev/tty; } 2>/dev/null; then
+      die "Agrega la deploy key y vuelve a ejecutar el script."
+    fi
+    read -r -p "Pulsa Enter cuando la hayas agregado (o Ctrl+C para salir)... " _ </dev/tty
+    if as_app "GIT_TERMINAL_PROMPT=0 git ls-remote '$REPO_URL' >/dev/null 2>&1"; then
+      ok "Acceso al repositorio OK"
+      return 0
+    fi
+    warn "Todavía no hay acceso. Revisa que la clave esté en el repo correcto."
+  done
+}
+
+# Mueve una instalación previa sin git y conserva sus datos.
+OLD_INSTALL=""
+move_aside_old_install() {
+  OLD_INSTALL="${APP_DIR}.bak-$(date +%Y%m%d-%H%M%S)"
+  warn "$APP_DIR existe y no es un repositorio git: se mueve a $OLD_INSTALL"
+  mv "$APP_DIR" "$OLD_INSTALL"
+}
+
+restore_old_data() {
+  [[ -n "$OLD_INSTALL" ]] || return 0
+  log "Recuperando .env, storage/ y public/uploads/ de $OLD_INSTALL"
+  if [[ -f "$OLD_INSTALL/.env" ]]; then cp -a "$OLD_INSTALL/.env" "$APP_DIR/.env"; ok ".env conservado"; fi
+  if [[ -d "$OLD_INSTALL/storage" ]]; then rsync -a "$OLD_INSTALL/storage/" "$APP_DIR/storage/"; fi
+  if [[ -d "$OLD_INSTALL/public/uploads" ]]; then rsync -a "$OLD_INSTALL/public/uploads/" "$APP_DIR/public/uploads/"; fi
+  ok "Cuando todo funcione puedes borrar: rm -rf $OLD_INSTALL"
+}
+
+fetch_code() {
+  log "Paso 2: código desde $REPO_URL (rama $BRANCH)"
+  if [[ -d "$APP_DIR/.git" ]]; then
+    chown -R "$APP_USER" "$APP_DIR"
+    ensure_repo_access
+    as_app "git -C '$APP_DIR' fetch --prune origin && git -C '$APP_DIR' checkout '$BRANCH' && git -C '$APP_DIR' pull --ff-only origin '$BRANCH'"
+  else
+    ensure_repo_access
+    if [[ -e "$APP_DIR" && -n "$(ls -A "$APP_DIR" 2>/dev/null)" ]]; then
+      move_aside_old_install
+    fi
+    mkdir -p "$APP_DIR"
+    chown "$APP_USER" "$APP_DIR"
+    as_app "git clone --branch '$BRANCH' '$REPO_URL' '$APP_DIR'"
+    restore_old_data
   fi
   [[ -f "$APP_DIR/composer.json" ]] || die "$APP_DIR no contiene el proyecto (falta composer.json)"
+  ok "git: $(as_app "git -C '$APP_DIR' log -1 --format='%h %s'")"
 }
 
 install_php_deps() {
@@ -465,6 +575,7 @@ seed_admin_if_missing() {
   admins="$(mysql -N -e "SELECT COUNT(*) FROM contact_center.users WHERE role='admin'" 2>/dev/null || echo 0)"
   if [[ "$admins" == 0 ]]; then
     (cd "$APP_DIR" && runuser -u "$WEB_USER" -- "$PHP_BIN" bin/seed-admin.php)
+    ADMIN_SEEDED=1
   else
     ok "Ya existe un administrador; no se modifica su contraseña"
   fi
@@ -571,8 +682,17 @@ configure_nginx() {
   local conf
   if [[ "$FAMILY" == rhel ]]; then
     conf=/etc/nginx/conf.d/contact-center.conf
-    # Que nuestro server sea el default (acceso por IP).
+    # Que nuestro server sea el default (acceso por IP): se quita
+    # default_server del nginx.conf y de otros sitios (p.ej. una instalación manual previa).
     sed -i 's/ default_server//' /etc/nginx/nginx.conf
+    local f
+    for f in /etc/nginx/conf.d/*.conf; do
+      [[ -f "$f" && "$f" != "$conf" ]] || continue
+      if grep -q 'default_server' "$f"; then
+        warn "Se quita default_server de $f (copia en $f.bak-deploy)"
+        sed -i.bak-deploy 's/ default_server//' "$f"
+      fi
+    done
   else
     conf=/etc/nginx/sites-available/contact-center
     ln -sf "$conf" /etc/nginx/sites-enabled/contact-center
@@ -753,7 +873,7 @@ summary() {
 =============================================================================
  Contact Center listo: ${scheme}://${HOST}/login
  Usuario admin:  ${admin}
- Contraseña:     sudo grep ^ADMIN_PASSWORD= ${APP_DIR}/.env
+ Contraseña:     $(if [[ "${ADMIN_SEEDED:-0}" == 1 ]]; then echo "sudo grep ^ADMIN_PASSWORD= ${APP_DIR}/.env"; else echo "la que ya tenías (el admin existía y no se modificó)"; fi)
  (cámbiala tras el primer login y vacía ADMIN_PASSWORD en el .env)
 
  Pendiente de completar en ${APP_DIR}/.env (después: sudo systemctl reload ${PHP_FPM_SERVICE}):
@@ -771,13 +891,17 @@ EOF
 detect_os
 
 if [[ "$CMD" == install ]]; then
+  # 1-2) Lo primero: clonar el repositorio.
+  bootstrap_git
+  fetch_code
+  # 3) Paquetes del sistema y resto de la instalación.
+  log "Paso 3: paquetes del sistema"
   if [[ "$FAMILY" == rhel ]]; then install_packages_rhel; else install_packages_debian; fi
   ensure_node
   ensure_composer
   configure_timezone
   configure_php
   setup_user_and_dir
-  fetch_code
   install_php_deps
   configure_env
   fix_perms
@@ -812,3 +936,7 @@ else
   [[ -n "$HOST" ]] && smoke_test
   log "Actualización completada"
 fi
+
+}  # fin de cc_main
+
+cc_main "$@" </dev/null
