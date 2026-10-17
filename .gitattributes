@@ -1,0 +1,3 @@
+# Los scripts de shell deben tener finales de línea LF para ejecutarse en Linux.
+*.sh text eol=lf
+bin/*.php text eol=lf

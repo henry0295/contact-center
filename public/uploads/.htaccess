@@ -1,0 +1,17 @@
+# Defensa en profundidad para la carpeta de imágenes subidas.
+# El backend ya valida el contenido real con getimagesize(), pero además aquí se
+# impide que Apache ejecute cualquier script si algo lograra colarse.
+
+# php_flag solo existe con mod_php: fuera de él (PHP-FPM) rompería Apache con
+# "Invalid command", por eso va condicionado al módulo.
+<IfModule mod_php7.c>
+    php_flag engine off
+</IfModule>
+<IfModule mod_php.c>
+    php_flag engine off
+</IfModule>
+
+# Bloqueo por extensión, válido con cualquier SAPI.
+<FilesMatch "\.(?i:php|phtml|php[0-9]|phps|phar|cgi|pl|py|sh|htaccess)$">
+    Require all denied
+</FilesMatch>
