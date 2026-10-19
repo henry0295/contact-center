@@ -161,7 +161,7 @@ class CampaignService
                     $this->messages->log($channel, $target, null, 'Dialing', null, $id);
                     $sent++;
                 } else {
-                    $this->sms->send($target, $personalBody, $senderId);
+                    $this->sms->send($target, $personalBody, $senderId, $campaign['sms_type'] ?? null);
                     $this->recipients->markSent((int) $r['id']);
                     $this->messages->log($channel, $target, null, 'Sent', null, $id);
                     $sent++;

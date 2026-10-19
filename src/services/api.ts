@@ -302,6 +302,8 @@ export interface DispatchPayload {
   scheduledAt?: string;
   expiresAt?: string;
   templateId?: number;
+  /** Solo SMS (IT Cloud): permitir que el destinatario responda (doble vía). */
+  twoWay?: boolean;
   /**
    * Solo email. Omitido = email de respuesta por defecto; 'none' = sin
    * Reply-To; o una de las direcciones registradas como email de respuesta.
@@ -327,7 +329,7 @@ export function sendSms(payload: DispatchPayload): Promise<DispatchResponse> {
   return request('/sms/send', { method: 'POST', body: jsonBody(payload) });
 }
 
-export function sendSmsTest(payload: { to: string; message: string; senderId?: string }): Promise<DispatchResponse> {
+export function sendSmsTest(payload: { to: string; message: string; senderId?: string; twoWay?: boolean }): Promise<DispatchResponse> {
   return request('/sms/test', { method: 'POST', body: jsonBody(payload) });
 }
 
@@ -335,8 +337,33 @@ export function smsEstimate(payload: { message: string; recipients: number }): P
   return request('/sms/estimate', { method: 'POST', body: jsonBody(payload) });
 }
 
-export function smsFields(): Promise<{ fields: PersonalizationField[]; previous: PreviousMessage[] }> {
+export function smsFields(): Promise<{
+  fields: PersonalizationField[];
+  previous: PreviousMessage[];
+  /** false con IT Cloud: el remitente lo fija la cuenta del proveedor. */
+  senderIdSupported?: boolean;
+  /** true si el proveedor admite SMS de doble vía (respuestas). */
+  twoWaySupported?: boolean;
+}> {
   return request('/sms/fields');
+}
+
+export interface SmsReply {
+  id: number;
+  phone: string;
+  message: string;
+  campaign_id: number | null;
+  campaign_name: string | null;
+  contact_name: string | null;
+  /** true si respondió SALIR/STOP/BAJA: el contacto quedó dado de baja. */
+  is_optout: boolean;
+  received_at: string;
+}
+
+export function listSmsReplies(params: { page?: number; perPage?: number; campaignId?: number; q?: string } = {}): Promise<{
+  replies: SmsReply[]; total: number; page: number; perPage: number;
+}> {
+  return request('/sms/replies' + qs(params));
 }
 
 export function emailFields(): Promise<{ fields: PersonalizationField[]; previous: PreviousMessage[] }> {

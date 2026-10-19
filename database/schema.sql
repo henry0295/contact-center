@@ -369,3 +369,24 @@ CREATE TABLE IF NOT EXISTS `credit_transactions` (
     KEY `idx_ct_type_time` (`type`, `created_at`),
     KEY `idx_ct_campaign` (`campaign_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- =====================================================================
+-- SMS de doble vía (proveedor IT Cloud). sms_type: '1via' (solo envío) o
+-- '2via' (el destinatario puede responder). Las respuestas llegan a
+-- /api/sms/inbound/<SMS_INBOUND_SECRET> y se guardan en sms_replies.
+-- =====================================================================
+ALTER TABLE `campaigns` ADD COLUMN IF NOT EXISTS `sms_type` VARCHAR(8) NULL;
+
+CREATE TABLE IF NOT EXISTS `sms_replies` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `phone` VARCHAR(32) NOT NULL,
+    `message` TEXT NOT NULL,
+    `campaign_id` INT UNSIGNED NULL,
+    `contact_id` INT UNSIGNED NULL,
+    `is_optout` TINYINT(1) NOT NULL DEFAULT 0,
+    `received_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    KEY `idx_sr_received` (`received_at`),
+    KEY `idx_sr_campaign` (`campaign_id`),
+    KEY `idx_sr_phone` (`phone`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

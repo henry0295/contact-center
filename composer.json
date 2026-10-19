@@ -29,7 +29,8 @@
         "db-user": "php bin/setup-db-user.php",
         "backup": "php bin/backup-db.php",
         "credits": "php bin/credits.php",
-        "voice-setup": "php bin/voice-setup.php"
+        "voice-setup": "php bin/voice-setup.php",
+        "sms-setup": "php bin/sms-setup.php"
     },
     "require-dev": {
         "phpunit/phpunit": "^10.5"

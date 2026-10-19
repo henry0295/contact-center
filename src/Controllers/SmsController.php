@@ -4,6 +4,7 @@ namespace App\Controllers;
 
 use App\Repositories\CampaignRepository;
 use App\Service\SendOrchestrator;
+use App\Service\SmsService;
 use App\Support\Sms;
 use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
@@ -47,6 +48,7 @@ class SmsController
                 'expiresAt'    => $data['expiresAt'] ?? null,
                 'templateId'   => $data['templateId'] ?? null,
                 'origin'       => 'direct',
+                'twoWay'       => filter_var($data['twoWay'] ?? false, FILTER_VALIDATE_BOOLEAN),
             ]);
         } catch (\InvalidArgumentException $e) {
             // 402 = saldo insuficiente (InsufficientCreditException).
@@ -98,6 +100,7 @@ class SmsController
                 'recipients' => [$to],
                 'senderId'   => $data['senderId'] ?? $data['sender'] ?? null,
                 'origin'     => 'test',
+                'twoWay'     => filter_var($data['twoWay'] ?? false, FILTER_VALIDATE_BOOLEAN),
             ]);
         } catch (\InvalidArgumentException $e) {
             // 402 = saldo insuficiente (InsufficientCreditException).
@@ -143,6 +146,10 @@ class SmsController
         return $this->jsonResponse($response, [
             'fields'   => Sms::availableFields(),
             'previous' => $this->campaigns->recentBodies('sms', 10),
+            // El remitente alfanumérico solo lo usa Amazon SNS; IT Cloud envía
+            // con el de la cuenta y ofrece en cambio la doble vía.
+            'senderIdSupported' => SmsService::provider() === 'sns',
+            'twoWaySupported'   => SmsService::provider() === 'itcloud',
         ]);
     }
 

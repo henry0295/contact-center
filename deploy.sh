@@ -49,6 +49,10 @@ VOICE_URL="http://indoor-qvmdkkckkpc.dynamic-m.com:8000"
 VOICE_URL_SET=0
 SKIP_VOICE=0
 VOICE_STATUS="sin configurar"
+# Proveedor de SMS (IT Cloud). Credenciales por cliente: SMS_EMAIL/SMS_TOKEN
+# como variables de entorno o se piden por consola.
+SKIP_SMS=0
+SMS_STATUS="sin configurar"
 CONF_FILE=/etc/contact-center/deploy.conf
 BACKUP_DIR=/var/lib/contact-center/backups
 
@@ -76,8 +80,11 @@ Opciones:
   --no-firewall           No tocar firewalld/ufw.
   --voice-url <url>       API de voz (por defecto http://indoor-qvmdkkckkpc.dynamic-m.com:8000).
   --no-voice              No crear el usuario/token de la API de voz.
+  --no-sms                No configurar el proveedor de SMS.
   Variable VOICE_ADMIN_KEY: clave de administrador de la API de voz (si no
   se da, se pide por consola; Enter la omite).
+  Variables SMS_EMAIL y SMS_TOKEN: cuenta del cliente en el proveedor de SMS
+  (IT Cloud / contacto-virtual.com). Si no se dan, se piden por consola.
 EOF
 }
 
@@ -130,6 +137,7 @@ while [[ $# -gt 0 ]]; do
     --no-firewall) SKIP_FIREWALL=1; shift ;;
     --voice-url)   VOICE_URL="${2:?Falta el valor de --voice-url}"; VOICE_URL_SET=1; shift 2 ;;
     --no-voice)    SKIP_VOICE=1; shift ;;
+    --no-sms)      SKIP_SMS=1; shift ;;
     -h|--help)     usage; exit 0 ;;
     *) die "Opción desconocida: $1" ;;
   esac
@@ -547,6 +555,11 @@ configure_env() {
     set_env VOICE_API_URL "$VOICE_URL"
   fi
   if [[ "$VOICE_URL_SET" == 1 ]]; then set_env VOICE_API_URL "$VOICE_URL"; fi
+  # Secreto de la URL donde el proveedor de SMS entrega las respuestas (doble vía).
+  ensure_env SMS_INBOUND_SECRET ""
+  if [[ -z "$(grep -E '^SMS_INBOUND_SECRET=' "$APP_DIR/.env" | cut -d= -f2-)" ]]; then
+    set_env SMS_INBOUND_SECRET "$(openssl rand -hex 24)"
+  fi
 
   chown "$APP_USER:$WEB_USER" "$APP_DIR/.env"
   chmod 640 "$APP_DIR/.env"
@@ -606,6 +619,78 @@ configure_voice() {
   warn "API de voz sin token: las llamadas no funcionarán todavía."
   VOICE_STATUS="pendiente: ejecuta  sudo VOICE_ADMIN_KEY='<clave>' $APP_DIR/deploy.sh update"
   return 0
+}
+
+# ------------------------------------------------------ proveedor de SMS ----
+# IT Cloud Services (contacto-virtual.com). Cada cliente tiene su propia
+# cuenta: se piden su email y su token (creado en la plataforma del
+# proveedor, opción Configuraciones). Viajan a bin/sms-setup.php por un
+# archivo temporal 600, no por la línea de comandos.
+run_sms_setup() {
+  local email="$1" token="$2" extra="${3:-}" tmp rc=0
+  tmp="$(mktemp)"
+  chmod 600 "$tmp"
+  printf '%s\n%s\n' "$email" "$token" > "$tmp"
+  chown "$APP_USER" "$tmp"
+  as_app "cd '$APP_DIR' && SMS_SETUP_EMAIL=\"\$(sed -n 1p '$tmp')\" SMS_SETUP_TOKEN=\"\$(sed -n 2p '$tmp')\" '$PHP_BIN' bin/sms-setup.php $extra" || rc=$?
+  rm -f "$tmp"
+  return "$rc"
+}
+
+configure_sms() {
+  if [[ "$SKIP_SMS" == 1 ]]; then SMS_STATUS="omitido (--no-sms)"; return 0; fi
+  log "Proveedor de SMS (IT Cloud Services): email y token de este cliente"
+
+  # 1) ¿Ya configurado y válido? (o credenciales dadas por variables)
+  local rc=0
+  run_sms_setup "${SMS_EMAIL:-}" "${SMS_TOKEN:-}" || rc=$?
+  if [[ $rc == 0 ]]; then SMS_STATUS="configurado"; return 0; fi
+  if [[ $rc != 2 ]]; then
+    warn "No se pudo validar el proveedor de SMS (ver el error arriba)."
+    SMS_STATUS="ERROR de conexión con contacto-virtual.com; luego: sudo $APP_DIR/deploy.sh update"
+    return 0
+  fi
+
+  # 2) Pedirlas por la terminal.
+  local email="" token="" attempt ans
+  for attempt in 1 2 3; do
+    if ! { : </dev/tty; } 2>/dev/null; then break; fi
+    printf '\nCuenta del proveedor de SMS (IT Cloud Services / contacto-virtual.com).\n' >/dev/tty
+    read -r -p "Email de la cuenta (Enter para omitir): " email </dev/tty || email=""
+    [[ -n "$email" ]] || break
+    read -r -s -p "Token de envío (Configuraciones en la plataforma; no se muestra): " token </dev/tty || token=""
+    printf '\n' >/dev/tty
+    [[ -n "$token" ]] || break
+    rc=0
+    run_sms_setup "$email" "$token" || rc=$?
+    if [[ $rc == 0 ]]; then SMS_STATUS="configurado"; return 0; fi
+    if [[ $rc != 2 ]]; then break; fi
+    read -r -p "¿Guardar estas credenciales sin validar (cuenta administradora)? [s/N]: " ans </dev/tty || ans=""
+    if [[ "$ans" =~ ^[sS]$ ]]; then
+      rc=0
+      run_sms_setup "$email" "$token" --no-check || rc=$?
+      if [[ $rc == 0 ]]; then SMS_STATUS="configurado (sin validar)"; return 0; fi
+    fi
+    warn "Credenciales no válidas (intento $attempt de 3)."
+  done
+  token=""
+
+  warn "Proveedor de SMS sin configurar: los SMS no saldrán todavía."
+  SMS_STATUS="pendiente: sudo SMS_EMAIL='<email>' SMS_TOKEN='<token>' $APP_DIR/deploy.sh update"
+  return 0
+}
+
+sms_inbound_url() {
+  local scheme=http secret
+  [[ "$HTTPS_MODE" != none ]] && scheme=https
+  secret="$(grep -E '^SMS_INBOUND_SECRET=' "$APP_DIR/.env" | cut -d= -f2-)"
+  printf '%s://%s/api/sms/inbound/%s' "$scheme" "$HOST" "$secret"
+}
+
+# IP pública con la que sale este servidor: el proveedor de SMS debe
+# registrarla en su firewall (avisar al comercial).
+public_ip() {
+  curl -fsS -m 5 https://api.ipify.org 2>/dev/null || curl -fsS -m 5 https://ifconfig.me 2>/dev/null || echo "desconocida"
 }
 
 # --------------------------------------------------------------- permisos ----
@@ -963,6 +1048,12 @@ summary() {
  (cámbiala tras el primer login y vacía ADMIN_PASSWORD en el .env)
 
  API de voz:     ${VOICE_STATUS}
+ SMS (IT Cloud): ${SMS_STATUS}
+   IP pública de este servidor: $(public_ip)
+   -> pídele al comercial del proveedor que la autorice en su firewall.
+   URL para recibir respuestas (SMS doble vía), dásela también al proveedor:
+     $(sms_inbound_url)
+   (debe ser accesible desde Internet; con una IP privada no llegarán respuestas)
 
  Saldo (créditos): solo se recarga por consola:
    sudo -u ${WEB_USER} ${PHP_BIN} ${APP_DIR}/bin/credits.php recharge 100000
@@ -997,6 +1088,7 @@ if [[ "$CMD" == install ]]; then
   install_php_deps
   configure_env
   configure_voice
+  configure_sms
   fix_perms
   configure_selinux_booleans
   setup_database
@@ -1020,6 +1112,9 @@ else
   configure_env
   configure_voice
   ok "API de voz: $VOICE_STATUS"
+  configure_sms
+  ok "SMS: $SMS_STATUS"
+  if [[ -n "$HOST" ]]; then ok "URL de respuestas SMS (doble vía) para el proveedor: $(sms_inbound_url)"; fi
   fix_perms
   log "Aplicando esquema (idempotente)"
   mysql < "$APP_DIR/database/schema.sql"

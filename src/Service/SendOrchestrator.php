@@ -105,6 +105,12 @@ class SendOrchestrator
             if ($senderError !== null) {
                 throw new \InvalidArgumentException($senderError);
             }
+            if (SmsService::provider() === 'itcloud' && mb_strlen($body) > SmsService::ITCLOUD_MAX_LENGTH) {
+                throw new \InvalidArgumentException(
+                    'El mensaje tiene ' . mb_strlen($body) . ' caracteres y el máximo del proveedor de SMS es '
+                    . SmsService::ITCLOUD_MAX_LENGTH . '.'
+                );
+            }
         }
         if ($channel === 'call') {
             $subject = null;
@@ -179,6 +185,8 @@ class SendOrchestrator
             'origin'          => $input['origin'] ?? 'direct',
             'voiceGender'     => $channel === 'call' ? (($input['voiceGender'] ?? 'F') === 'M' ? 'M' : 'F') : null,
             'replyTo'         => $replyTo,
+            // Doble vía: solo SMS con IT Cloud. NULL = 1via (por defecto del proveedor).
+            'smsType'         => ($channel === 'sms' && !empty($input['twoWay']) && SmsService::provider() === 'itcloud') ? '2via' : null,
         ]);
 
         $this->recipients->addMany($campaignId, $recipients);

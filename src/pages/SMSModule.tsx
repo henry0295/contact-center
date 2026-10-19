@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Send, Loader2, Users, Tag, Clock, CalendarX, FileText, Trash2,
-  History, TestTube2, ChevronDown, Smartphone, Sparkles, Download,
+  History, TestTube2, ChevronDown, Smartphone, Sparkles, Download, MessageSquareReply,
 } from 'lucide-react';
+import SmsReplies from '../components/SmsReplies';
 import toast from 'react-hot-toast';
 import * as api from '../services/api';
 import { refreshBalance } from '../components/BalanceGauge';
@@ -10,7 +11,7 @@ import {
   type RecipientEntry, parseRecipients, parseRecipientsCsv, downloadCsv, PHONE_HEADERS,
 } from '../utils/csvRecipients';
 
-type Tab = 'compose' | 'templates';
+type Tab = 'compose' | 'templates' | 'replies';
 type RecipientSource = 'paste' | 'csv' | 'list';
 
 const parseSmsCsv = (text: string) => parseRecipientsCsv(text, PHONE_HEADERS, 'phone');
@@ -51,6 +52,10 @@ const SMSModule: React.FC = () => {
   // --- Compositor ---
   const [name, setName] = useState(autoName());
   const [senderId, setSenderId] = useState('');
+  // Capacidades del proveedor (IT Cloud: sin remitente propio, con doble vía).
+  const [senderIdSupported, setSenderIdSupported] = useState(false);
+  const [twoWaySupported, setTwoWaySupported] = useState(false);
+  const [twoWay, setTwoWay] = useState(false);
   const [message, setMessage] = useState('');
   const [tags, setTags] = useState('');
   const [source, setSource] = useState<RecipientSource>('paste');
@@ -83,7 +88,12 @@ const SMSModule: React.FC = () => {
 
   useEffect(() => {
     api.listLists().then((r) => setLists(r.lists)).catch(() => {});
-    api.smsFields().then((r) => { setFields(r.fields); setPrevious(r.previous); }).catch(() => {});
+    api.smsFields().then((r) => {
+      setFields(r.fields);
+      setPrevious(r.previous);
+      setSenderIdSupported(r.senderIdSupported === true);
+      setTwoWaySupported(r.twoWaySupported === true);
+    }).catch(() => {});
     refreshTemplates();
   }, []);
 
@@ -175,14 +185,15 @@ const SMSModule: React.FC = () => {
 
   const validate = (): api.DispatchPayload | null => {
     if (!message.trim()) { toast.error('Escribe el mensaje.'); return null; }
-    if (senderId.trim().length > 15) { toast.error('El remitente no puede superar 15 caracteres.'); return null; }
+    if (senderIdSupported && senderId.trim().length > 15) { toast.error('El remitente no puede superar 15 caracteres.'); return null; }
 
     const payload: api.DispatchPayload = {
       name: name.trim() || undefined,
       body: message,
-      senderId: senderId.trim() || undefined,
+      senderId: senderIdSupported ? (senderId.trim() || undefined) : undefined,
       tags: tags.trim() || undefined,
       scheduleType,
+      twoWay: twoWaySupported && twoWay ? true : undefined,
     };
 
     if (scheduleType === 'scheduled') {
@@ -234,7 +245,8 @@ const SMSModule: React.FC = () => {
       const res = await api.sendSmsTest({
         to: testPhone.trim(),
         message,
-        senderId: senderId.trim() || undefined,
+        senderId: senderIdSupported ? (senderId.trim() || undefined) : undefined,
+        twoWay: twoWaySupported && twoWay ? true : undefined,
       });
       if (res.success) {
         toast.success(res.message);
@@ -316,13 +328,14 @@ const SMSModule: React.FC = () => {
         <nav className="flex border-b border-gray-200" aria-label="Secciones del módulo de SMS">
           {tabButton('compose', 'Compositor', Send)}
           {tabButton('templates', 'Plantillas', FileText)}
+          {twoWaySupported && tabButton('replies', 'Respuestas', MessageSquareReply)}
         </nav>
 
         {tab === 'compose' && (
           <form onSubmit={submit} className="grid grid-cols-1 gap-6 p-6 lg:grid-cols-3">
             {/* ---------------- Columna principal ---------------- */}
             <div className="space-y-5 lg:col-span-2">
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div className={`grid grid-cols-1 gap-4 ${senderIdSupported ? 'sm:grid-cols-2' : ''}`}>
                 <div>
                   <label htmlFor="campName" className={labelClass}>Nombre de la campaña</label>
                   <input
@@ -333,20 +346,42 @@ const SMSModule: React.FC = () => {
                     className={inputClass}
                   />
                 </div>
-                <div>
-                  <label htmlFor="senderId" className={labelClass}>Remitente</label>
-                  <input
-                    id="senderId"
-                    type="text"
-                    maxLength={15}
-                    value={senderId}
-                    onChange={(e) => setSenderId(e.target.value)}
-                    className={inputClass}
-                    placeholder="Ej. ContactCC"
-                  />
-                  <p className="mt-1 text-right text-xs text-gray-500">{senderId.length}/15</p>
-                </div>
+                {senderIdSupported && (
+                  <div>
+                    <label htmlFor="senderId" className={labelClass}>Remitente</label>
+                    <input
+                      id="senderId"
+                      type="text"
+                      maxLength={15}
+                      value={senderId}
+                      onChange={(e) => setSenderId(e.target.value)}
+                      className={inputClass}
+                      placeholder="Ej. ContactCC"
+                    />
+                    <p className="mt-1 text-right text-xs text-gray-500">{senderId.length}/15</p>
+                  </div>
+                )}
               </div>
+
+              {twoWaySupported && (
+                <label className="flex items-start gap-3 rounded-md border border-gray-200 bg-gray-50 p-3">
+                  <input
+                    type="checkbox"
+                    checked={twoWay}
+                    onChange={(e) => setTwoWay(e.target.checked)}
+                    className="mt-0.5 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                  />
+                  <span>
+                    <span className="flex items-center gap-1.5 text-sm font-medium text-gray-800">
+                      <MessageSquareReply className="h-4 w-4 text-gray-400" aria-hidden="true" />
+                      Permitir respuestas (SMS doble vía)
+                    </span>
+                    <span className="mt-0.5 block text-xs text-gray-500">
+                      Los destinatarios podrán responder y verás sus respuestas en la pestaña "Respuestas".
+                    </span>
+                  </span>
+                </label>
+              )}
 
               <div>
                 <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
@@ -619,7 +654,7 @@ const SMSModule: React.FC = () => {
                 <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-gray-700">
                   <Smartphone className="h-4 w-4 text-gray-400" /> Previsualización
                 </h3>
-                <PhonePreview sender={senderId} message={message} />
+                <PhonePreview sender={senderIdSupported ? senderId : ''} message={message} />
               </div>
 
               <div className="rounded-lg border border-gray-200 p-4">
@@ -647,6 +682,8 @@ const SMSModule: React.FC = () => {
             </div>
           </form>
         )}
+
+        {tab === 'replies' && <SmsReplies />}
 
         {tab === 'templates' && (
           <div className="space-y-6 p-6">

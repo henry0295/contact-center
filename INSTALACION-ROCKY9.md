@@ -814,6 +814,24 @@ curl -sS http://indoor-qvmdkkckkpc.dynamic-m.com:8000/        # {"status":"API O
 
 Si funciona aquí pero la app dice que no conecta, revisa el booleano SELinux `httpd_can_network_connect` (§3.1).
 
+### 14.0 Proveedor de SMS (IT Cloud Services)
+
+Los SMS salen por **IT Cloud Services** (`contacto-virtual.com`). Cada cliente usa **su propia cuenta**: `deploy.sh` pide el **email** y el **token** de envío (se crea en la plataforma del proveedor, opción *Configuraciones*), los valida con la consulta de saldo del proveedor y los guarda en el `.env` (`SMS_PROVIDER=itcloud`, `ITCLOUD_SMS_EMAIL`, `ITCLOUD_SMS_TOKEN`).
+
+```bash
+# Sin preguntas:
+curl -fsSL https://raw.githubusercontent.com/henry0295/contact-center/main/deploy.sh | sudo SMS_EMAIL='cliente@empresa.com' SMS_TOKEN='<token>' VOICE_ADMIN_KEY='<clave>' bash
+# Configurar o cambiar más tarde:
+sudo SMS_EMAIL='cliente@empresa.com' SMS_TOKEN='<token>' /var/www/contact-center/deploy.sh update
+```
+
+- El proveedor solo acepta envíos desde IPs autorizadas: el resumen final de `deploy.sh` muestra la **IP pública** del servidor; pásala al comercial del proveedor.
+- Mensajes de hasta 757 caracteres. Los números se normalizan a prefijo de país + número (`3001234567` → `573001234567`).
+- El campo "Remitente" se oculta en el módulo SMS: este proveedor envía con el remitente de la cuenta.
+- **SMS doble vía:** en el compositor, "Permitir respuestas" envía con `type_send=2via`. Las respuestas llegan a `https://<host>/api/sms/inbound/<SMS_INBOUND_SECRET>` (`deploy.sh` genera el secreto y muestra la URL completa al final): **informa esa URL al proveedor**. Se ven en SMS → Respuestas, asociadas a la campaña; quien responde SALIR/STOP/BAJA queda dado de baja. La URL debe ser accesible desde Internet (con una IP privada no llegan respuestas). Si el secreto se filtra, bórralo del `.env`, ejecuta `deploy.sh update` y envía la URL nueva al proveedor.
+- Las cuentas con perfil administrador no admiten la consulta de saldo: `deploy.sh` ofrece guardarlas sin validar.
+- Para volver a Amazon SNS: `SMS_PROVIDER=sns` en el `.env` y `sudo systemctl reload php-fpm`.
+
 ### 14.1 Saldo (créditos) y precios
 
 Cada envío se descuenta de un saldo prepago en pesos: **SMS $27, email $20, llamada de voz $75** (valores iniciales). Reglas:

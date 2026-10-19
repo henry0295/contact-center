@@ -54,6 +54,10 @@ $app->post('/api/webhooks/ses', 'App\Controllers\WebhookController:ses');
 // puede exigir sesión. Se protege con el token aleatorio de cada contacto.
 $app->get('/unsubscribe/{token}', 'App\Controllers\UnsubscribeController:unsubscribe');
 
+// Respuestas de SMS de doble vía: las envía el proveedor (IT Cloud), sin
+// sesión. Se protege con el secreto aleatorio SMS_INBOUND_SECRET de la URL.
+$app->map(['GET', 'POST'], '/api/sms/inbound/{secret}', 'App\Controllers\SmsReplyController:inbound');
+
 // Catch-all de preflight CORS: el middleware de app añade las cabeceras.
 // Debe quedar fuera del grupo protegido para que OPTIONS no exija token.
 $app->options('/api/{routes:.+}', function (Request $req, $res) {
@@ -104,6 +108,7 @@ $app->group('/api', function ($group) {
     $group->post('/sms/test', 'App\Controllers\SmsController:test');
     $group->post('/sms/estimate', 'App\Controllers\SmsController:estimate');
     $group->get('/sms/fields', 'App\Controllers\SmsController:fields');
+    $group->get('/sms/replies', 'App\Controllers\SmsReplyController:list');
 
     // Llamadas de voz (TTS + Asterisk, API externa en 192.168.101.92:8000).
     $group->get('/calls/capabilities', 'App\Controllers\CallController:capabilities');
