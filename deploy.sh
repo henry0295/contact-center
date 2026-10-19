@@ -53,6 +53,11 @@ VOICE_STATUS="sin configurar"
 # como variables de entorno o se piden por consola.
 SKIP_SMS=0
 SMS_STATUS="sin configurar"
+# phpMyAdmin en /phpmyadmin/ (se instala por defecto). PMA_ALLOW: lista de
+# IPs/CIDR separadas por comas que pueden abrirlo (vacío = cualquiera, con
+# autenticación básica + login de phpMyAdmin).
+SKIP_PMA=0
+PMA_ALLOW=""
 CONF_FILE=/etc/contact-center/deploy.conf
 BACKUP_DIR=/var/lib/contact-center/backups
 
@@ -81,6 +86,8 @@ Opciones:
   --voice-url <url>       API de voz (por defecto http://indoor-qvmdkkckkpc.dynamic-m.com:8000).
   --no-voice              No crear el usuario/token de la API de voz.
   --no-sms                No configurar el proveedor de SMS.
+  --no-phpmyadmin         No instalar phpMyAdmin (o retirarlo; --phpmyadmin lo reactiva).
+  --pma-allow <ips>       Solo estas IPs/CIDR pueden abrir /phpmyadmin/ (ej. 192.168.101.0/24).
   Variable VOICE_ADMIN_KEY: clave de administrador de la API de voz (si no
   se da, se pide por consola; Enter la omite).
   Variables SMS_EMAIL y SMS_TOKEN: cuenta del cliente en el proveedor de SMS
@@ -138,6 +145,9 @@ while [[ $# -gt 0 ]]; do
     --voice-url)   VOICE_URL="${2:?Falta el valor de --voice-url}"; VOICE_URL_SET=1; shift 2 ;;
     --no-voice)    SKIP_VOICE=1; shift ;;
     --no-sms)      SKIP_SMS=1; shift ;;
+    --no-phpmyadmin) SKIP_PMA=1; shift ;;
+    --phpmyadmin)  SKIP_PMA=0; shift ;;
+    --pma-allow)   PMA_ALLOW="${2:?Falta el valor de --pma-allow}"; shift 2 ;;
     -h|--help)     usage; exit 0 ;;
     *) die "Opción desconocida: $1" ;;
   esac
@@ -168,6 +178,9 @@ if [[ -n "$ADMIN_EMAIL" ]]; then
 fi
 [[ "$REPO_URL" != *"'"* && "$BRANCH" != *"'"* ]] || die "--repo/--branch no pueden contener comillas"
 [[ -z "$BRANCH" || "$BRANCH" =~ ^[A-Za-z0-9._/-]+$ ]] || die "--branch no válido"
+if [[ -n "$PMA_ALLOW" && ! "$PMA_ALLOW" =~ ^[0-9./:a-fA-F]+(,[0-9./:a-fA-F]+)*$ ]]; then
+  die "--pma-allow no válido (ej. 192.168.101.0/24,10.0.0.5): $PMA_ALLOW"
+fi
 VOICE_URL="${VOICE_URL%/}"
 [[ "$VOICE_URL" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?$ ]] || die "--voice-url no válida: $VOICE_URL"
 
@@ -769,6 +782,7 @@ nginx_locations() {
   cat <<EOF
     root ${APP_DIR}/dist;
     index index.html;
+    include ${PMA_SNIPPET_DIR}/*.conf;
 
     # CSV 5 MB, adjuntos 7 MB, imágenes 3 MB (+ margen multipart).
     client_max_body_size 20m;
@@ -850,6 +864,7 @@ self_signed_cert() {
 
 configure_nginx() {
   log "Configurando Nginx para $HOST (HTTPS: $HTTPS_MODE)"
+  install -d -m 755 "$PMA_SNIPPET_DIR"   # snippets incluidos por el sitio (phpMyAdmin)
   local conf
   if [[ "$FAMILY" == rhel ]]; then
     conf=/etc/nginx/conf.d/contact-center.conf
@@ -944,6 +959,190 @@ configure_firewall() {
   return 0
 }
 
+# ------------------------------------------------------------ phpMyAdmin ----
+# phpMyAdmin oficial (tarball verificado con SHA-256) en /phpmyadmin/, con:
+#   - Autenticación HTTP básica de Nginx delante (usuario/clave propios).
+#   - Usuario de BD propio (cc_dbadmin), sin acceso a las tablas de créditos:
+#     el saldo y los precios solo se tocan por consola (bin/credits.php).
+#   - root no puede entrar por web (AllowRoot = false; además usa unix_socket).
+# Credenciales en /etc/contact-center/phpmyadmin.txt (solo root).
+PMA_DIR=/usr/share/phpmyadmin-cc
+PMA_TMP=/var/lib/phpmyadmin-cc/tmp
+PMA_CREDS=/etc/contact-center/phpmyadmin.txt
+PMA_SNIPPET_DIR=/etc/nginx/contact-center.d
+PMA_STATUS="sin instalar"
+
+nginx_site_conf() {
+  if [[ "$FAMILY" == rhel ]]; then echo /etc/nginx/conf.d/contact-center.conf
+  else echo /etc/nginx/sites-available/contact-center; fi
+}
+
+# Instalaciones previas: añade el include de snippets al sitio si no lo tiene.
+ensure_nginx_snippet_include() {
+  local conf
+  conf="$(nginx_site_conf)"
+  install -d -m 755 "$PMA_SNIPPET_DIR"
+  [[ -f "$conf" ]] || return 0
+  if ! grep -q "include ${PMA_SNIPPET_DIR}/\*.conf;" "$conf"; then
+    cp -a "$conf" "$conf.bak-deploy"
+    sed -i "s|^\(\s*\)index index.html;|&\n\1include ${PMA_SNIPPET_DIR}/*.conf;|" "$conf"
+    ok "Añadido 'include ${PMA_SNIPPET_DIR}/*.conf' a $conf (copia en $conf.bak-deploy)"
+  fi
+}
+
+install_phpmyadmin_files() {
+  local version tmp file base
+  version="$(curl -fsSL -m 20 https://www.phpmyadmin.net/home_page/version.txt | head -n1 | tr -d '[:space:]')"
+  [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { warn "No se pudo obtener la versión de phpMyAdmin"; return 1; }
+  if [[ -f "$PMA_DIR/.cc-version" && "$(cat "$PMA_DIR/.cc-version")" == "$version" ]]; then
+    ok "phpMyAdmin $version ya instalado"
+    return 0
+  fi
+  log "Descargando phpMyAdmin $version"
+  tmp="$(mktemp -d)"
+  file="phpMyAdmin-${version}-all-languages.tar.xz"
+  base="https://files.phpmyadmin.net/phpMyAdmin/${version}"
+  curl -fsSL -m 120 "$base/$file" -o "$tmp/$file"
+  curl -fsSL -m 20 "$base/$file.sha256" -o "$tmp/$file.sha256"
+  (cd "$tmp" && sha256sum -c "$file.sha256" >/dev/null) || { rm -rf "$tmp"; warn "Checksum de phpMyAdmin incorrecto"; return 1; }
+  mkdir -p "$tmp/x"
+  tar -xJf "$tmp/$file" -C "$tmp/x" --strip-components=1
+  rm -rf "$PMA_DIR"
+  mv "$tmp/x" "$PMA_DIR"
+  rm -rf "$tmp" "$PMA_DIR/setup"          # el asistente de configuración web no se usa
+  echo "$version" > "$PMA_DIR/.cc-version"
+  ok "phpMyAdmin $version en $PMA_DIR"
+}
+
+# Permisos del usuario de BD de phpMyAdmin: todo sobre contact_center salvo
+# las tablas de créditos (sin acceso). Se recalcula en cada update para
+# incluir tablas nuevas.
+grant_pma_db_user() {
+  local user="$1" pass="$2" t grants=""
+  mysql -e "CREATE USER IF NOT EXISTS '${user}'@'localhost' IDENTIFIED BY '${pass}';
+            ALTER USER '${user}'@'localhost' IDENTIFIED BY '${pass}';
+            REVOKE ALL PRIVILEGES, GRANT OPTION FROM '${user}'@'localhost';"
+  while read -r t; do
+    [[ -n "$t" ]] || continue
+    grants+="GRANT ALL PRIVILEGES ON \`contact_center\`.\`${t}\` TO '${user}'@'localhost';"
+  done < <(mysql -N -e "SELECT table_name FROM information_schema.tables
+                         WHERE table_schema = 'contact_center' AND table_name NOT LIKE 'credit\_%'")
+  [[ -n "$grants" ]] && mysql -e "$grants"
+  mysql -e "FLUSH PRIVILEGES;"
+}
+
+configure_phpmyadmin() {
+  local snippet="$PMA_SNIPPET_DIR/phpmyadmin.conf"
+  if [[ "$SKIP_PMA" == 1 ]]; then
+    if [[ -f "$snippet" ]]; then rm -f "$snippet"; nginx -t && systemctl reload nginx; fi
+    PMA_STATUS="no instalado (--no-phpmyadmin)"
+    return 0
+  fi
+  log "phpMyAdmin (acceso web en /phpmyadmin/)"
+  ensure_nginx_snippet_include
+  if ! install_phpmyadmin_files; then
+    PMA_STATUS="ERROR al descargar; reintenta con: sudo $APP_DIR/deploy.sh update"
+    return 0
+  fi
+
+  # Credenciales: se generan una vez y se reutilizan.
+  install -d -m 700 /etc/contact-center
+  if [[ ! -f "$PMA_CREDS" ]]; then
+    {
+      echo "# phpMyAdmin de Contact Center (generado por deploy.sh). Solo root."
+      echo "PMA_WEB_USER=ccadmin"
+      echo "PMA_WEB_PASS=$(openssl rand -hex 12)"
+      echo "PMA_DB_USER=cc_dbadmin"
+      echo "PMA_DB_PASS=$(openssl rand -hex 16)"
+      echo "PMA_BLOWFISH=$(openssl rand -hex 32)"
+    } > "$PMA_CREDS"
+  fi
+  chmod 600 "$PMA_CREDS"
+  local PMA_WEB_USER PMA_WEB_PASS PMA_DB_USER PMA_DB_PASS PMA_BLOWFISH
+  # shellcheck disable=SC1090
+  . "$PMA_CREDS"
+
+  grant_pma_db_user "$PMA_DB_USER" "$PMA_DB_PASS"
+
+  install -d -m 770 -o "$WEB_USER" -g "$WEB_USER" "$PMA_TMP"
+  cat > "$PMA_DIR/config.inc.php" <<EOF
+<?php
+// Generado por deploy.sh (Contact Center). No editar: se regenera en cada update.
+declare(strict_types=1);
+\$cfg['blowfish_secret'] = hex2bin('${PMA_BLOWFISH}');
+\$i = 1;
+\$cfg['Servers'][\$i]['auth_type'] = 'cookie';
+\$cfg['Servers'][\$i]['host'] = 'localhost';
+\$cfg['Servers'][\$i]['AllowNoPassword'] = false;
+\$cfg['Servers'][\$i]['AllowRoot'] = false;
+\$cfg['Servers'][\$i]['only_db'] = 'contact_center';
+\$cfg['TempDir'] = '${PMA_TMP}';
+\$cfg['UploadDir'] = '';
+\$cfg['SaveDir'] = '';
+\$cfg['VersionCheck'] = false;
+\$cfg['LoginCookieValidity'] = 3600;
+\$cfg['ShowServerInfo'] = false;
+\$cfg['PmaNoRelation_DisableWarning'] = true;
+EOF
+  chown -R root:root "$PMA_DIR"
+  chown "root:$WEB_USER" "$PMA_DIR/config.inc.php"
+  chmod 640 "$PMA_DIR/config.inc.php"
+  find "$PMA_DIR" -type d -exec chmod 755 {} +
+
+  # Autenticación básica de Nginx (primera barrera, antes del login de phpMyAdmin).
+  printf '%s:%s\n' "$PMA_WEB_USER" "$(openssl passwd -apr1 -stdin <<<"$PMA_WEB_PASS")" > /etc/nginx/cc-phpmyadmin.htpasswd
+  chown "root:$WEB_USER" /etc/nginx/cc-phpmyadmin.htpasswd
+  chmod 640 /etc/nginx/cc-phpmyadmin.htpasswd
+
+  local allow_rules=""
+  if [[ -n "$PMA_ALLOW" ]]; then
+    local cidr
+    IFS=',' read -ra _cidrs <<<"$PMA_ALLOW"
+    for cidr in "${_cidrs[@]}"; do allow_rules+="        allow ${cidr};"$'\n'; done
+    allow_rules+="        deny all;"$'\n'
+  fi
+
+  cat > "$snippet" <<EOF
+# Gestionado por deploy.sh (Contact Center): phpMyAdmin.
+location = /phpmyadmin { return 301 /phpmyadmin/; }
+location ^~ /phpmyadmin/ {
+${allow_rules}        auth_basic "phpMyAdmin";
+        auth_basic_user_file /etc/nginx/cc-phpmyadmin.htpasswd;
+        alias ${PMA_DIR}/;
+        index index.php;
+
+        location ~ ^/phpmyadmin/(libraries|templates|vendor|src|sql|setup|doc/html/_sources)/ { deny all; }
+        location ~ /\. { deny all; }
+
+        location ~ ^/phpmyadmin/(.+\.php)\$ {
+            alias ${PMA_DIR}/\$1;
+            include fastcgi_params;
+            fastcgi_param SCRIPT_FILENAME ${PMA_DIR}/\$1;
+            fastcgi_pass unix:${PHP_SOCK};
+            fastcgi_read_timeout 300s;
+        }
+}
+EOF
+
+  if selinux_on; then
+    semanage fcontext -a -t httpd_sys_content_t "${PMA_DIR}(/.*)?" 2>/dev/null \
+      || semanage fcontext -m -t httpd_sys_content_t "${PMA_DIR}(/.*)?"
+    semanage fcontext -a -t httpd_sys_rw_content_t "/var/lib/phpmyadmin-cc(/.*)?" 2>/dev/null \
+      || semanage fcontext -m -t httpd_sys_rw_content_t "/var/lib/phpmyadmin-cc(/.*)?"
+    restorecon -R "$PMA_DIR" /var/lib/phpmyadmin-cc /etc/nginx/cc-phpmyadmin.htpasswd "$PMA_SNIPPET_DIR"
+  fi
+
+  if nginx -t 2>/dev/null; then
+    systemctl reload nginx
+    PMA_STATUS="instalado"
+  else
+    nginx -t || true
+    rm -f "$snippet"
+    warn "La configuración de phpMyAdmin no pasó 'nginx -t'; se retiró."
+    PMA_STATUS="ERROR en la configuración de Nginx"
+  fi
+}
+
 # -------------------------------------------------------- tareas (systemd) ---
 configure_timers() {
   log "Tareas programadas (dispatcher cada minuto, backup diario 02:30)"
@@ -1010,6 +1209,7 @@ save_conf() {
     printf 'APP_DIR=%q\nAPP_USER=%q\nHOST=%q\nHTTPS_MODE=%q\n' "$APP_DIR" "$APP_USER" "$HOST" "$HTTPS_MODE"
     if [[ -n "$BRANCH" ]]; then printf 'BRANCH=%q\n' "$BRANCH"; fi
     if [[ -n "$LE_EMAIL" ]]; then printf 'LE_EMAIL=%q\n' "$LE_EMAIL"; fi
+    printf 'SKIP_PMA=%q\nPMA_ALLOW=%q\n' "$SKIP_PMA" "$PMA_ALLOW"
   } > "$CONF_FILE"
   chmod 600 "$CONF_FILE"
 }
@@ -1055,6 +1255,8 @@ summary() {
      $(sms_inbound_url)
    (debe ser accesible desde Internet; con una IP privada no llegarán respuestas)
 
+ phpMyAdmin:     ${PMA_STATUS}$(if [[ "$PMA_STATUS" == instalado ]]; then printf '\n   %s://%s/phpmyadmin/\n   Credenciales (acceso web y usuario de BD):  sudo cat %s' "$scheme" "$HOST" "$PMA_CREDS"; fi)
+
  Saldo (créditos): solo se recarga por consola:
    sudo -u ${WEB_USER} ${PHP_BIN} ${APP_DIR}/bin/credits.php recharge 100000
    sudo -u ${WEB_USER} ${PHP_BIN} ${APP_DIR}/bin/credits.php balance    (también: history, usage, prices, set-price)
@@ -1095,6 +1297,7 @@ if [[ "$CMD" == install ]]; then
   build_frontend
   fix_perms
   configure_nginx
+  configure_phpmyadmin
   configure_firewall
   configure_timers
   save_conf
@@ -1120,6 +1323,12 @@ else
   mysql < "$APP_DIR/database/schema.sql"
   build_frontend
   fix_perms
+  configure_phpmyadmin
+  if [[ "$PMA_STATUS" == instalado && -n "$HOST" ]]; then
+    ok "phpMyAdmin: $([[ "$HTTPS_MODE" != none ]] && echo https || echo http)://${HOST}/phpmyadmin/  (credenciales: sudo cat $PMA_CREDS)"
+  else
+    ok "phpMyAdmin: $PMA_STATUS"
+  fi
   configure_timers
   save_conf
   systemctl reload "$PHP_FPM_SERVICE" || systemctl restart "$PHP_FPM_SERVICE"

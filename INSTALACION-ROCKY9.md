@@ -832,6 +832,15 @@ sudo SMS_EMAIL='cliente@empresa.com' SMS_TOKEN='<token>' /var/www/contact-center
 - Las cuentas con perfil administrador no admiten la consulta de saldo: `deploy.sh` ofrece guardarlas sin validar.
 - Para volver a Amazon SNS: `SMS_PROVIDER=sns` en el `.env` y `sudo systemctl reload php-fpm`.
 
+### 14.0.1 phpMyAdmin
+
+`deploy.sh` instala phpMyAdmin (versión oficial, verificada con SHA-256) en **`/phpmyadmin/`** del mismo sitio:
+
+- Dos barreras: autenticación básica de Nginx y luego el login de phpMyAdmin. Ambas credenciales se generan una vez y quedan en `/etc/contact-center/phpmyadmin.txt` (solo root): `sudo cat /etc/contact-center/phpmyadmin.txt`.
+- Usuario de BD propio `cc_dbadmin`, solo sobre `contact_center` y **sin acceso a las tablas de créditos** (`credit_*`): el saldo y los precios siguen siendo solo por consola. `root` no puede entrar por web.
+- Restringir por IP: `--pma-allow 192.168.101.0/24,10.0.0.5`. No instalarlo (o retirarlo): `--no-phpmyadmin`; volver a activarlo: `--phpmyadmin`. Las opciones se recuerdan en los siguientes `update`.
+- Por HTTP las contraseñas viajan sin cifrar: usa `--https self-signed` o restringe por IP.
+
 ### 14.1 Saldo (créditos) y precios
 
 Cada envío se descuenta de un saldo prepago en pesos: **SMS $27, email $20, llamada de voz $75** (valores iniciales). Reglas:
