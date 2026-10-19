@@ -28,6 +28,8 @@ set -Eeuo pipefail
 # lee completo antes de ejecutar nada, y los comandos hijos (ssh, apt, npm)
 # no pueden consumir por error el resto del script desde stdin.
 cc_main() {
+# Argumentos originales: si git pull trae un deploy.sh nuevo, se relanza con ellos.
+CC_ORIG_ARGS=("$@")
 
 # ----------------------------------------------------------------- defaults --
 APP_USER=contactcenter
@@ -460,6 +462,19 @@ EOF
     fi
     warn "Todavía no hay acceso. Revisa que la clave esté en el repo correcto."
   done
+}
+
+# Si git pull trajo un deploy.sh distinto del que se está ejecutando, se
+# relanza el nuevo: si no, los pasos nuevos (p.ej. la API de voz) no se
+# ejecutarían hasta el siguiente update. Una sola vez (CC_DEPLOY_RELAUNCHED).
+reexec_if_script_changed() {
+  [[ -z "${CC_DEPLOY_RELAUNCHED:-}" && -n "${SELF_TMP:-}" && -f "$SELF_TMP" ]] || return 0
+  [[ -f "$APP_DIR/deploy.sh" ]] || return 0
+  if ! cmp -s "$SELF_TMP" "$APP_DIR/deploy.sh"; then
+    log "deploy.sh se actualizó con git pull: se relanza la versión nueva"
+    rm -f "$SELF_TMP"
+    exec env -u CC_DEPLOY_REEXEC CC_DEPLOY_RELAUNCHED=1 bash "$APP_DIR/deploy.sh" "${CC_ORIG_ARGS[@]}"
+  fi
 }
 
 # Mueve una instalación previa sin git y conserva sus datos.
@@ -970,6 +985,7 @@ if [[ "$CMD" == install ]]; then
   # 1-2) Lo primero: clonar el repositorio.
   bootstrap_git
   fetch_code
+  reexec_if_script_changed
   # 3) Paquetes del sistema y resto de la instalación.
   log "Paso 3: paquetes del sistema"
   if [[ "$FAMILY" == rhel ]]; then install_packages_rhel; else install_packages_debian; fi
@@ -999,6 +1015,7 @@ else
   ensure_node
   ensure_composer
   fetch_code
+  reexec_if_script_changed
   install_php_deps
   configure_env
   configure_voice

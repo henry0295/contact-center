@@ -58,8 +58,8 @@ class VoiceCallService
     {
         if (!$this->isConfigured()) {
             throw new \RuntimeException(
-                'La API de llamadas de voz no está configurada. Define VOICE_API_URL y '
-                . 'VOICE_API_KEY en el .env (servidor Asterisk 192.168.101.92).'
+                'La API de llamadas de voz no está configurada. Ejecuta en el servidor: '
+                . 'sudo VOICE_ADMIN_KEY=\'<clave>\' /var/www/contact-center/deploy.sh update'
             );
         }
 
