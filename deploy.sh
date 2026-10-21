@@ -30,6 +30,10 @@ set -Eeuo pipefail
 cc_main() {
 # Argumentos originales: si git pull trae un deploy.sh nuevo, se relanza con ellos.
 CC_ORIG_ARGS=("$@")
+# Servidores endurecidos (CIS) traen umask 027/077 para root: las carpetas que
+# crea el script (p.ej. /var/www) quedarían sin permiso de paso para
+# contactcenter y nginx. Los permisos finos los fija fix_perms().
+umask 022
 
 # ----------------------------------------------------------------- defaults --
 APP_USER=contactcenter
@@ -397,6 +401,7 @@ EOF
 setup_user_and_dir() {
   log "Permisos de $APP_DIR para $APP_USER y $WEB_USER"
   id "$APP_USER" >/dev/null 2>&1 || useradd -m -s /bin/bash "$APP_USER"
+  ensure_parents_traversable
   usermod -aG "$WEB_USER" "$APP_USER"
   chown -R "$APP_USER:$WEB_USER" "$APP_DIR"
   chmod 750 "$APP_DIR"
@@ -499,6 +504,22 @@ reexec_if_script_changed() {
   fi
 }
 
+# contactcenter (git, npm) y nginx necesitan ATRAVESAR las carpetas padre de
+# APP_DIR (p.ej. /var/www). Si un umask restrictivo las dejó en 750/700, git
+# falla con "could not create work tree dir ... Permission denied". Solo se
+# añade el permiso de paso (x), no el de lectura del listado.
+ensure_parents_traversable() {
+  local d
+  d="$(dirname "$APP_DIR")"
+  while [[ "$d" != "/" && -n "$d" ]]; do
+    if [[ -d "$d" ]] && ! runuser -u "$APP_USER" -- test -x "$d" 2>/dev/null; then
+      warn "Se da permiso de paso (o+x) a $d para $APP_USER y $WEB_USER"
+      chmod o+x "$d"
+    fi
+    d="$(dirname "$d")"
+  done
+}
+
 # Mueve una instalación previa sin git y conserva sus datos.
 OLD_INSTALL=""
 move_aside_old_install() {
@@ -528,6 +549,7 @@ fetch_code() {
       move_aside_old_install
     fi
     mkdir -p "$APP_DIR"
+    ensure_parents_traversable
     chown "$APP_USER" "$APP_DIR"
     as_app "git clone --branch '$BRANCH' '$REPO_URL' '$APP_DIR'"
     restore_old_data
