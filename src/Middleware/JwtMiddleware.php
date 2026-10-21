@@ -47,7 +47,8 @@ class JwtMiddleware
         }
 
         try {
-            if (!$this->sessions->isActive($jti)) {
+            $currentRole = $this->sessions->activeRole($jti);
+            if ($currentRole === null) {
                 return $this->unauthorized('La sesión se cerró o fue revocada');
             }
         } catch (\Throwable $e) {
@@ -62,7 +63,8 @@ class JwtMiddleware
                 'id'    => (int) $decoded->sub,
                 'email' => $decoded->email ?? null,
                 'name'  => $decoded->name ?? null,
-                'role'  => $decoded->role ?? null,
+                // Rol leído de la BD, no del token (puede haber cambiado).
+                'role'  => $currentRole,
             ]);
 
         return $handler->handle($request);

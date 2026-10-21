@@ -61,6 +61,24 @@ class SessionRepository
         return $stmt->fetchColumn() !== false;
     }
 
+    /**
+     * Rol ACTUAL del usuario de una sesión activa (null si la sesión no vale o
+     * el usuario ya no existe). Se usa en vez del rol del JWT para que bajar
+     * de rol o borrar a un usuario surta efecto de inmediato.
+     */
+    public function activeRole(string $jti): ?string
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT u.role FROM sessions s JOIN users u ON u.id = s.user_id
+              WHERE s.jti = :jti AND s.revoked = 0 AND s.expires_at > NOW() LIMIT 1'
+        );
+        $stmt->bindValue(':jti', $jti, PDO::PARAM_STR);
+        $stmt->execute();
+        $role = $stmt->fetchColumn();
+
+        return $role === false ? null : (string) $role;
+    }
+
     public function revoke(string $jti): bool
     {
         $stmt = $this->pdo->prepare('UPDATE sessions SET revoked = 1 WHERE jti = :jti AND revoked = 0');

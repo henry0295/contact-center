@@ -838,7 +838,7 @@ sudo SMS_EMAIL='cliente@empresa.com' SMS_TOKEN='<token>' /var/www/contact-center
 
 - Dos barreras: autenticación básica de Nginx y luego el login de phpMyAdmin. Ambas credenciales se generan una vez y quedan en `/etc/contact-center/phpmyadmin.txt` (solo root): `sudo cat /etc/contact-center/phpmyadmin.txt`.
 - Usuario de BD propio `cc_dbadmin`, solo sobre `contact_center` y **sin acceso a las tablas de créditos** (`credit_*`): el saldo y los precios siguen siendo solo por consola. `root` no puede entrar por web.
-- Restringir por IP: `--pma-allow 192.168.101.0/24,10.0.0.5`. No instalarlo (o retirarlo): `--no-phpmyadmin`; volver a activarlo: `--phpmyadmin`. Las opciones se recuerdan en los siguientes `update`.
+- Por defecto solo se abre desde redes privadas (10/8, 172.16/12, 192.168/16). Restringir más: `--pma-allow 192.168.101.0/24,10.0.0.5`; abrirlo a cualquier IP: `--pma-allow any` (no recomendado). No instalarlo (o retirarlo): `--no-phpmyadmin`; volver a activarlo: `--phpmyadmin`. Las opciones se recuerdan en los siguientes `update`.
 - Por HTTP las contraseñas viajan sin cifrar: usa `--https self-signed` o restringe por IP.
 
 ### 14.1 Saldo (créditos) y precios

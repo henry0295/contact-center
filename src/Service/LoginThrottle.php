@@ -35,11 +35,14 @@ class LoginThrottle
     /**
      * @return array{blocked:bool, retryAfter:int, reason:?string}
      */
-    public function check(string $ip, ?string $email): array
+    public function check(string $ip, ?string $email, bool $includesCurrent = false): array
     {
+        // Si el intento en curso ya está registrado (begin()), se permite uno más.
+        $extra = $includesCurrent ? 1 : 0;
+
         if ($email !== null && $email !== '') {
             $byEmail = $this->attempts->failuresByEmail($email, self::WINDOW_SECONDS);
-            if ($byEmail >= self::MAX_PER_EMAIL) {
+            if ($byEmail >= self::MAX_PER_EMAIL + $extra) {
                 return [
                     'blocked'    => true,
                     'retryAfter' => $this->attempts->secondsUntilUnlock($ip, $email, self::WINDOW_SECONDS),
@@ -49,7 +52,7 @@ class LoginThrottle
         }
 
         $byIp = $this->attempts->failuresByIp($ip, self::WINDOW_SECONDS);
-        if ($byIp >= self::MAX_PER_IP) {
+        if ($byIp >= self::MAX_PER_IP + $extra) {
             return [
                 'blocked'    => true,
                 'retryAfter' => $this->attempts->secondsUntilUnlock($ip, null, self::WINDOW_SECONDS),
@@ -58,6 +61,22 @@ class LoginThrottle
         }
 
         return ['blocked' => false, 'retryAfter' => 0, 'reason' => null];
+    }
+
+    /**
+     * Registra el intento como fallido ANTES de verificar la contraseña. Si
+     * resulta correcto, succeed() lo marca como exitoso. Así las peticiones
+     * concurrentes no pueden pasar todas el límite a la vez.
+     */
+    public function begin(string $ip, string $email): int
+    {
+        return $this->attempts->record($ip, $email, false);
+    }
+
+    public function succeed(int $attemptId, string $email): void
+    {
+        $this->attempts->markSuccessful($attemptId);
+        $this->attempts->clearForEmail($email);
     }
 
     public function recordFailure(string $ip, ?string $email): void

@@ -88,6 +88,7 @@ Opciones:
   --no-sms                No configurar el proveedor de SMS.
   --no-phpmyadmin         No instalar phpMyAdmin (o retirarlo; --phpmyadmin lo reactiva).
   --pma-allow <ips>       Solo estas IPs/CIDR pueden abrir /phpmyadmin/ (ej. 192.168.101.0/24).
+                          Por defecto: solo redes privadas. "any" = cualquier IP.
   Variable VOICE_ADMIN_KEY: clave de administrador de la API de voz (si no
   se da, se pide por consola; Enter la omite).
   Variables SMS_EMAIL y SMS_TOKEN: cuenta del cliente en el proveedor de SMS
@@ -178,7 +179,7 @@ if [[ -n "$ADMIN_EMAIL" ]]; then
 fi
 [[ "$REPO_URL" != *"'"* && "$BRANCH" != *"'"* ]] || die "--repo/--branch no pueden contener comillas"
 [[ -z "$BRANCH" || "$BRANCH" =~ ^[A-Za-z0-9._/-]+$ ]] || die "--branch no válido"
-if [[ -n "$PMA_ALLOW" && ! "$PMA_ALLOW" =~ ^[0-9./:a-fA-F]+(,[0-9./:a-fA-F]+)*$ ]]; then
+if [[ -n "$PMA_ALLOW" && "$PMA_ALLOW" != any && ! "$PMA_ALLOW" =~ ^[0-9./:a-fA-F]+(,[0-9./:a-fA-F]+)*$ ]]; then
   die "--pma-allow no válido (ej. 192.168.101.0/24,10.0.0.5): $PMA_ALLOW"
 fi
 VOICE_URL="${VOICE_URL%/}"
@@ -555,6 +556,10 @@ configure_env() {
   fi
   # Mismo origen: Nginx pasa /api/ a PHP-FPM. Nunca una URL absoluta.
   set_env VITE_API_URL /api
+  # Sesiones más cortas: si siguen con los valores por defecto antiguos
+  # (24 h / 14 días) se pasan a 2 h / 7 días. Un valor personalizado se respeta.
+  if grep -qx 'JWT_EXPIRY=86400' "$APP_DIR/.env"; then set_env JWT_EXPIRY 7200; fi
+  if grep -qx 'JWT_REFRESH_EXPIRY=1209600' "$APP_DIR/.env"; then set_env JWT_REFRESH_EXPIRY 604800; fi
   if [[ -n "$HOST" ]]; then
     set_env APP_URL "${scheme}://${HOST}"
     set_env CORS_ALLOWED_ORIGIN "${scheme}://${HOST}"
@@ -792,6 +797,11 @@ nginx_locations() {
     add_header X-Frame-Options "SAMEORIGIN" always;
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
     add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+    # CSP: solo scripts propios (bloquea XSS por scripts inyectados). Estilos
+    # en línea e imágenes remotas se permiten porque los usan el editor de
+    # plantillas y los correos.
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https: http:; font-src 'self' data:; connect-src 'self'; frame-src 'self' about: blob: data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'" always;
+$(if [[ "$HTTPS_MODE" == letsencrypt ]]; then echo '    add_header Strict-Transport-Security "max-age=31536000" always;'; fi)
 
     access_log /var/log/nginx/contact-center.access.log;
     error_log  /var/log/nginx/contact-center.error.log;
@@ -807,6 +817,17 @@ nginx_locations() {
         fastcgi_param DOCUMENT_ROOT   ${APP_DIR}/public;
         fastcgi_pass unix:${PHP_SOCK};
         fastcgi_read_timeout 300s;
+    }
+
+    # Respuestas SMS (doble vía): el secreto va en la URL, así que no se
+    # escribe en el access log.
+    location ^~ /api/sms/inbound/ {
+        access_log off;
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME ${APP_DIR}/public/index.php;
+        fastcgi_param SCRIPT_NAME     /index.php;
+        fastcgi_param DOCUMENT_ROOT   ${APP_DIR}/public;
+        fastcgi_pass unix:${PHP_SOCK};
     }
 
     # Enlaces de baja de correos/SMS (ruta de Slim fuera de /api).
@@ -1094,10 +1115,11 @@ EOF
   chown "root:$WEB_USER" /etc/nginx/cc-phpmyadmin.htpasswd
   chmod 640 /etc/nginx/cc-phpmyadmin.htpasswd
 
-  local allow_rules=""
-  if [[ -n "$PMA_ALLOW" ]]; then
+  # Por defecto solo redes privadas (LAN/VPN). "--pma-allow any" lo abre a todos.
+  local allow_rules="" effective="${PMA_ALLOW:-127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}"
+  if [[ "$effective" != any ]]; then
     local cidr
-    IFS=',' read -ra _cidrs <<<"$PMA_ALLOW"
+    IFS=',' read -ra _cidrs <<<"$effective"
     for cidr in "${_cidrs[@]}"; do allow_rules+="        allow ${cidr};"$'\n'; done
     allow_rules+="        deny all;"$'\n'
   fi
@@ -1106,7 +1128,13 @@ EOF
 # Gestionado por deploy.sh (Contact Center): phpMyAdmin.
 location = /phpmyadmin { return 301 /phpmyadmin/; }
 location ^~ /phpmyadmin/ {
-${allow_rules}        auth_basic "phpMyAdmin";
+${allow_rules}        # Cabeceras propias: la CSP de la app (sin scripts en línea) rompería
+        # phpMyAdmin; estas reemplazan a las del bloque server.
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "SAMEORIGIN" always;
+        add_header Referrer-Policy "no-referrer" always;
+        add_header Content-Security-Policy "frame-ancestors 'self'; object-src 'none'; base-uri 'self'" always;
+        auth_basic "phpMyAdmin";
         auth_basic_user_file /etc/nginx/cc-phpmyadmin.htpasswd;
         alias ${PMA_DIR}/;
         index index.php;
@@ -1323,6 +1351,9 @@ else
   mysql < "$APP_DIR/database/schema.sql"
   build_frontend
   fix_perms
+  # Se regenera la configuración de Nginx para aplicar las cabeceras de
+  # seguridad y rutas nuevas (los certificados existentes se reutilizan).
+  if [[ -n "$HOST" ]]; then configure_nginx; fi
   configure_phpmyadmin
   if [[ "$PMA_STATUS" == instalado && -n "$HOST" ]]; then
     ok "phpMyAdmin: $([[ "$HTTPS_MODE" != none ]] && echo https || echo http)://${HOST}/phpmyadmin/  (credenciales: sudo cat $PMA_CREDS)"

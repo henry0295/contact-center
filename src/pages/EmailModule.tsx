@@ -9,6 +9,7 @@ import RichTextEditor from '../components/RichTextEditor';
 import AttachmentPicker from '../components/AttachmentPicker';
 import { useSesData } from '../context/SesDataContext';
 import { refreshBalance } from '../components/BalanceGauge';
+import SafeHtmlFrame from '../components/SafeHtmlFrame';
 import {
   type RecipientEntry, parseRecipients, parseRecipientsCsv, downloadCsv, EMAIL_HEADERS,
 } from '../utils/csvRecipients';
@@ -663,10 +664,11 @@ const EmailModule: React.FC = () => {
                 {templates.map((t) => (
                   <div key={t.id} className="flex flex-col overflow-hidden rounded-lg border border-gray-200 transition-shadow hover:shadow-md">
                     <div className="h-32 overflow-hidden border-b border-gray-200 bg-gray-50 p-2">
-                      <div
-                        className="pointer-events-none origin-top-left scale-[0.45]"
-                        style={{ width: '222%' }}
-                        dangerouslySetInnerHTML={{ __html: t.body }}
+                      <SafeHtmlFrame
+                        html={t.body}
+                        title={`Miniatura de ${t.name}`}
+                        className="pointer-events-none origin-top-left scale-[0.45] bg-white"
+                        style={{ width: '222%', height: '222%' }}
                       />
                     </div>
                     <div className="flex flex-1 flex-col p-3">
@@ -739,7 +741,12 @@ const EmailModule: React.FC = () => {
               </button>
             </div>
             <div className="overflow-y-auto bg-gray-100 p-4">
-              <div className="mx-auto max-w-xl rounded bg-white p-4 shadow-sm" dangerouslySetInnerHTML={{ __html: preview.body }} />
+              <SafeHtmlFrame
+                html={preview.body}
+                title={`Vista previa de ${preview.name}`}
+                className="mx-auto block w-full max-w-xl rounded bg-white shadow-sm"
+                style={{ height: '70vh' }}
+              />
             </div>
           </div>
         </div>

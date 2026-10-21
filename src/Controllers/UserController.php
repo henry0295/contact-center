@@ -74,7 +74,8 @@ class UserController
         $name = trim($data['name'] ?? '');
         $email = trim($data['email'] ?? '');
         $password = (string) ($data['password'] ?? '');
-        $role = trim($data['role'] ?? 'admin') ?: 'admin';
+        // Por defecto el rol con MENOS privilegios: admin hay que pedirlo explícitamente.
+        $role = trim((string) ($data['role'] ?? 'operator')) ?: 'operator';
 
         if ($name === '' || $email === '' || $password === '') {
             return $this->jsonResponse($response, ['error' => 'Nombre, email y contraseña son obligatorios'], 400);

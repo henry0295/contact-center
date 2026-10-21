@@ -14,7 +14,7 @@ class LoginAttemptRepository
         $this->pdo = $pdo ?? Connection::get();
     }
 
-    public function record(string $ip, ?string $email, bool $successful): void
+    public function record(string $ip, ?string $email, bool $successful): int
     {
         $stmt = $this->pdo->prepare(
             'INSERT INTO login_attempts (ip, email, successful) VALUES (:ip, :email, :ok)'
@@ -22,6 +22,15 @@ class LoginAttemptRepository
         $stmt->bindValue(':ip', $ip, PDO::PARAM_STR);
         $stmt->bindValue(':email', $email, $email === null ? PDO::PARAM_NULL : PDO::PARAM_STR);
         $stmt->bindValue(':ok', $successful ? 1 : 0, PDO::PARAM_INT);
+        $stmt->execute();
+
+        return (int) $this->pdo->lastInsertId();
+    }
+
+    public function markSuccessful(int $id): void
+    {
+        $stmt = $this->pdo->prepare('UPDATE login_attempts SET successful = 1 WHERE id = :id');
+        $stmt->bindValue(':id', $id, PDO::PARAM_INT);
         $stmt->execute();
     }
 

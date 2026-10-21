@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as api from '../services/api';
+import { useUser } from '../context/UserContext';
 
 type Tab = 'resumen' | 'historial' | 'campanas' | 'supresiones';
 
@@ -115,6 +116,9 @@ const DailyChart: React.FC<{ points: api.DailyPoint[] }> = ({ points }) => {
 };
 
 const Reports: React.FC = () => {
+  // Borrar campañas y liberar supresiones es solo para administradores (el
+  // backend lo impone con RoleMiddleware; aquí solo se ocultan los botones).
+  const { isAdmin } = useUser();
   const [tab, setTab] = useState<Tab>('resumen');
 
   const [summary, setSummary] = useState<api.ReportSummary | null>(null);
@@ -639,7 +643,9 @@ const Reports: React.FC = () => {
                                 {c.status !== 'Completed' && c.status !== 'Sending' && (
                                   <button onClick={() => sendCampaignNow(c.id)} title="Enviar ahora" className="text-blue-600 hover:text-blue-900"><Send className="h-4 w-4" /></button>
                                 )}
-                                <button onClick={() => removeCampaign(c.id)} title="Eliminar" className="text-red-600 hover:text-red-900"><Trash2 className="h-4 w-4" /></button>
+                                {isAdmin && (
+                                  <button onClick={() => removeCampaign(c.id)} title="Eliminar" className="text-red-600 hover:text-red-900"><Trash2 className="h-4 w-4" /></button>
+                                )}
                               </div>
                             </td>
                           </tr>
@@ -695,10 +701,12 @@ const Reports: React.FC = () => {
                           {s.detail ? ` · ${s.detail}` : ''} · {formatDate(s.created_at)}
                         </p>
                       </div>
-                      <button type="button" onClick={() => unsuppress(s.email)}
-                        className="shrink-0 rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50">
-                        Liberar
-                      </button>
+                      {isAdmin && (
+                        <button type="button" onClick={() => unsuppress(s.email)}
+                          className="shrink-0 rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50">
+                          Liberar
+                        </button>
+                      )}
                     </li>
                   ))}
                 </ul>

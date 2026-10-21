@@ -32,35 +32,42 @@ class AuthController
     public function login(Request $request, Response $response): Response
     {
         $data = $request->getParsedBody() ?? [];
-        $email = trim($data['email'] ?? '');
+        // Normalizado: la búsqueda de usuarios no distingue mayúsculas, así que el
+        // contador tampoco debe (si no, "Admin@" y "admin@" serían cuentas
+        // distintas para el límite y se podría esquivar).
+        $email = mb_strtolower(trim((string) ($data['email'] ?? '')));
         $password = (string) ($data['password'] ?? '');
         $ip = RequestSupport::clientIp();
 
         if ($email === '' || $password === '') {
             return $this->jsonResponse($response, ['error' => 'Email y contraseña son obligatorios'], 400);
         }
+        // bcrypt ignora a partir del byte 72; un tope evita además peticiones enormes.
+        if (mb_strlen($email) > 255 || strlen($password) > 1024) {
+            return $this->jsonResponse($response, ['error' => 'Credenciales inválidas'], 401);
+        }
 
         // Freno a la fuerza bruta antes de tocar la base de datos de usuarios.
         $state = $this->throttle->check($ip, $email);
         if ($state['blocked']) {
-            Logger::app()->warning('Login bloqueado por demasiados intentos', array_merge(
-                Logger::requestContext(),
-                ['email' => $email, 'motivo' => $state['reason']]
-            ));
+            return $this->tooManyAttempts($response, $email, $state);
+        }
 
-            $minutes = (int) ceil($state['retryAfter'] / 60);
-
-            return $this->jsonResponse($response, [
-                'error'      => 'Demasiados intentos fallidos. Inténtalo de nuevo en '
-                    . ($minutes <= 1 ? 'un minuto' : "{$minutes} minutos") . '.',
-                'retryAfter' => $state['retryAfter'],
-            ], 429)->withHeader('Retry-After', (string) $state['retryAfter']);
+        // El intento se registra ANTES de verificar la contraseña. Así, con
+        // muchas peticiones en paralelo, todas cuentan: sin esto, varias pasaban
+        // el check() a la vez y se superaba el límite.
+        $attemptId = $this->throttle->begin($ip, $email);
+        $state = $this->throttle->check($ip, $email, true);
+        if ($state['blocked']) {
+            return $this->tooManyAttempts($response, $email, $state);
         }
 
         $user = $this->users->findByEmail($email);
-        if ($user === null || !password_verify($password, $user['password_hash'])) {
-            $this->throttle->recordFailure($ip, $email);
-
+        // Se verifica siempre contra un hash (uno ficticio si el usuario no
+        // existe): el tiempo de respuesta no revela qué correos están registrados.
+        $valid = password_verify($password, $user['password_hash'] ?? self::DUMMY_HASH) && $user !== null;
+        if (!$valid) {
+            // El intento ya quedó registrado como fallido en begin().
             Logger::app()->warning('Intento de login fallido', array_merge(
                 Logger::requestContext(),
                 ['email' => $email]
@@ -77,9 +84,28 @@ class AuthController
             return $this->jsonResponse($response, $payload, 401);
         }
 
-        $this->throttle->recordSuccess($ip, $email);
+        $this->throttle->succeed($attemptId, $email);
 
         return $this->issueSession($response, $user, $request, 'Login correcto');
+    }
+
+    /** Hash bcrypt de una contraseña aleatoria, solo para igualar tiempos. */
+    private const DUMMY_HASH = '$2y$10$GfLE/z1AR9tAytBmW4R58.257QPFc6x6x01P5bJrxVPqb6nzSBJFW';
+
+    private function tooManyAttempts(Response $response, string $email, array $state): Response
+    {
+        Logger::app()->warning('Login bloqueado por demasiados intentos', array_merge(
+            Logger::requestContext(),
+            ['email' => $email, 'motivo' => $state['reason']]
+        ));
+
+        $minutes = (int) ceil($state['retryAfter'] / 60);
+
+        return $this->jsonResponse($response, [
+            'error'      => 'Demasiados intentos fallidos. Inténtalo de nuevo en '
+                . ($minutes <= 1 ? 'un minuto' : "{$minutes} minutos") . '.',
+            'retryAfter' => $state['retryAfter'],
+        ], 429)->withHeader('Retry-After', (string) $state['retryAfter']);
     }
 
     /** Devuelve el usuario autenticado (lo inyecta el JwtMiddleware). */
@@ -176,7 +202,16 @@ class AuthController
         }
 
         $user = $this->users->findById((int) $authUser['id']);
+        // Mismo límite que el login: con una sesión robada no se puede probar
+        // contraseñas actuales sin freno.
+        $ip = RequestSupport::clientIp();
+        $throttleKey = mb_strtolower((string) ($user['email'] ?? ''));
+        $state = $this->throttle->check($ip, $throttleKey);
+        if ($state['blocked']) {
+            return $this->tooManyAttempts($response, $throttleKey, $state);
+        }
         if ($user === null || !password_verify($current, $user['password_hash'])) {
+            $this->throttle->recordFailure($ip, $throttleKey);
             Logger::app()->warning('Cambio de contraseña rechazado', array_merge(
                 Logger::requestContext(),
                 ['email' => $authUser['email'] ?? null]

@@ -74,28 +74,34 @@ $app->group('/api', function ($group) {
     $group->post('/auth/logout-all', 'App\Controllers\AuthController:logoutAll');
     $group->post('/auth/change-password', 'App\Controllers\AuthController:changePassword');
 
-    // Usuarios: solo el rol admin puede gestionarlos.
+    // Solo administradores: usuarios, configuración de SES (dominios y
+    // remitentes), lista de supresión y borrado de campañas. Los operadores
+    // envían y consultan, pero no cambian la configuración ni borran historial.
     $group->group('', function ($admin) {
         $admin->get('/users', 'App\Controllers\UserController:index');
         $admin->post('/users', 'App\Controllers\UserController:create');
         $admin->delete('/users/{id}', 'App\Controllers\UserController:delete');
         $admin->post('/users/{id}/reset-password', 'App\Controllers\UserController:resetPassword');
+
+        $admin->post('/domains/verify', 'App\Controllers\DomainVerificationController:verifyDomain');
+        $admin->get('/domains/{domain}/status', 'App\Controllers\DomainVerificationController:checkDomainStatus');
+        $admin->post('/domains/{domain}/reverify', 'App\Controllers\DomainVerificationController:reverifyDomain');
+        $admin->delete('/domains/{domain}', 'App\Controllers\DomainVerificationController:deleteDomain');
+
+        $admin->post('/senders/verify', 'App\Controllers\SenderVerificationController:verifySender');
+        $admin->get('/senders/{email}/status', 'App\Controllers\SenderVerificationController:checkSenderStatus');
+        $admin->post('/senders/default', 'App\Controllers\SenderVerificationController:setDefaultSender');
+        $admin->post('/senders/{email}/resend', 'App\Controllers\SenderVerificationController:resendSenderVerification');
+        $admin->delete('/senders/{email}', 'App\Controllers\SenderVerificationController:deleteSender');
+
+        $admin->delete('/suppressions/{email}', 'App\Controllers\ReportController:removeSuppression');
+        $admin->delete('/campaigns/{id}', 'App\Controllers\CampaignController:delete');
     })->add(new RoleMiddleware('admin'));
 
-    // Verificación de dominios (SES)
-    $group->post('/domains/verify', 'App\Controllers\DomainVerificationController:verifyDomain');
-    $group->get('/domains/{domain}/status', 'App\Controllers\DomainVerificationController:checkDomainStatus');
+    // Lectura de dominios y remitentes: la usan todos (p.ej. el remitente
+    // activo y los emails de respuesta del módulo Email).
     $group->get('/domains', 'App\Controllers\DomainVerificationController:listDomains');
-    $group->post('/domains/{domain}/reverify', 'App\Controllers\DomainVerificationController:reverifyDomain');
-    $group->delete('/domains/{domain}', 'App\Controllers\DomainVerificationController:deleteDomain');
-
-    // Verificación de remitentes (SES)
-    $group->post('/senders/verify', 'App\Controllers\SenderVerificationController:verifySender');
-    $group->get('/senders/{email}/status', 'App\Controllers\SenderVerificationController:checkSenderStatus');
     $group->get('/senders', 'App\Controllers\SenderVerificationController:listVerifiedSenders');
-    $group->post('/senders/default', 'App\Controllers\SenderVerificationController:setDefaultSender');
-    $group->post('/senders/{email}/resend', 'App\Controllers\SenderVerificationController:resendSenderVerification');
-    $group->delete('/senders/{email}', 'App\Controllers\SenderVerificationController:deleteSender');
 
     // Envíos. Todos crean una campaña (ver SendOrchestrator): send y send-bulk
     // son el mismo camino; se mantienen las dos rutas por compatibilidad.
@@ -142,7 +148,6 @@ $app->group('/api', function ($group) {
     $group->post('/campaigns', 'App\Controllers\CampaignController:create');
     $group->post('/campaigns/{id}/send', 'App\Controllers\CampaignController:sendNow');
     $group->post('/campaigns/{id}/cancel', 'App\Controllers\CampaignController:cancelSchedule');
-    $group->delete('/campaigns/{id}', 'App\Controllers\CampaignController:delete');
 
     // Subida de imágenes para los editores
     $group->post('/uploads/image', 'App\Controllers\UploadController:image');
@@ -151,7 +156,6 @@ $app->group('/api', function ($group) {
     $group->get('/messages', 'App\Controllers\ReportController:messages');
     $group->get('/reports/summary', 'App\Controllers\ReportController:summary');
     $group->get('/suppressions', 'App\Controllers\ReportController:suppressions');
-    $group->delete('/suppressions/{email}', 'App\Controllers\ReportController:removeSuppression');
 
     // Dashboard
     $group->get('/dashboard/stats', 'App\Controllers\DashboardController:stats');

@@ -16,8 +16,8 @@ class AuthService
 {
     private const ALG = 'HS256';
 
-    /** Validez del refresh token (14 días por defecto). */
-    public const REFRESH_TTL = 1209600;
+    /** Validez del refresh token (7 días por defecto). */
+    public const REFRESH_TTL = 604800;
 
     private static function secret(): string
     {
@@ -34,7 +34,7 @@ class AuthService
 
     private static function ttl(): int
     {
-        return (int) ($_ENV['JWT_EXPIRY'] ?? 86400);
+        return (int) ($_ENV['JWT_EXPIRY'] ?? 7200);
     }
 
     public static function refreshTtl(): int

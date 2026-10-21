@@ -4,7 +4,7 @@ import { Mail, Lock, AlertCircle } from 'lucide-react';
 import { useUser } from '../context/UserContext';
 
 const Login: React.FC = () => {
-  const { login, isAuthenticated, loading } = useUser();
+  const { login, isAuthenticated } = useUser();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');

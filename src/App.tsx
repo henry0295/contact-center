@@ -60,7 +60,7 @@ function App() {
                         para llamadas ahora la genera y origina directamente el módulo
                         Llamadas, vía la API de Asterisk. Se redirige por compatibilidad. */}
                     <Route path="audio" element={<Navigate to="/calls" replace />} />
-                    <Route path="verification" element={<Verification />} />
+                    <Route path="verification" element={<AdminRoute><Verification /></AdminRoute>} />
                     <Route path="contacts" element={<Contacts />} />
                     <Route path="settings" element={<Settings />} />
                     {/* Gestión de usuarios: solo administradores. */}

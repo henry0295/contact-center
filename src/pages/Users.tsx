@@ -9,7 +9,7 @@ const Users: React.FC = () => {
   const [users, setUsers] = useState<api.AuthUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({ name: '', email: '', password: '', role: 'admin' });
+  const [form, setForm] = useState({ name: '', email: '', password: '', role: 'operator' });
 
   const load = async () => {
     setLoading(true);
@@ -37,7 +37,7 @@ const Users: React.FC = () => {
     try {
       await api.createUser(form);
       toast.success('Usuario creado');
-      setForm({ name: '', email: '', password: '', role: 'admin' });
+      setForm({ name: '', email: '', password: '', role: 'operator' });
       load();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Error al crear usuario');
@@ -86,7 +86,7 @@ const Users: React.FC = () => {
           <UserPlus className="mr-2 h-5 w-5 text-blue-600" />
           Nuevo usuario
         </h3>
-        <form onSubmit={handleCreate} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <form onSubmit={handleCreate} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
           <input
             type="text"
             placeholder="Nombre"
@@ -108,6 +108,15 @@ const Users: React.FC = () => {
             onChange={(e) => setForm({ ...form, password: e.target.value })}
             className="shadow-sm focus:ring-blue-500 focus:border-blue-500 block w-full sm:text-sm border-gray-300 rounded-md border px-3 py-2"
           />
+          <select
+            aria-label="Rol"
+            value={form.role}
+            onChange={(e) => setForm({ ...form, role: e.target.value })}
+            className="shadow-sm focus:ring-blue-500 focus:border-blue-500 block w-full sm:text-sm border-gray-300 rounded-md border px-3 py-2"
+          >
+            <option value="operator">Operador (envía y consulta)</option>
+            <option value="admin">Administrador (todo)</option>
+          </select>
           <button
             type="submit"
             disabled={saving}

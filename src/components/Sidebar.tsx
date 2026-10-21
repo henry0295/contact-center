@@ -65,7 +65,7 @@ const Sidebar: React.FC = () => {
           <NavItem to="/email" icon={<Mail />} label="Email" />
           <NavItem to="/sms" icon={<MessageSquare />} label="SMS" />
           <NavItem to="/calls" icon={<PhoneCall />} label="Llamadas" />
-          <NavItem to="/verification" icon={<ShieldCheck />} label="Verificación" />
+          {isAdmin && <NavItem to="/verification" icon={<ShieldCheck />} label="Verificación" />}
           <NavItem to="/contacts" icon={<Contact />} label="Contactos" />
           {/* La gestión de campañas vive en Reportes (pestaña Campañas): cada
               envío de SMS/Email ya crea su propia campaña automáticamente. */}
