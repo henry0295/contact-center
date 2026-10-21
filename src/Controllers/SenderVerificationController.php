@@ -119,6 +119,22 @@ class SenderVerificationController
         $emailDomain = strtolower(substr($email, strpos($email, '@') + 1));
         $domainVerified = $this->isDomainVerified($emailDomain);
 
+        // Un remitente que ya existe como identidad en la cuenta de AWS pero no
+        // en esta instalación es de otro cliente (cuenta compartida).
+        if (!$domainVerified && $existing === null && !DomainVerificationController::allowExistingIdentities()) {
+            try {
+                $attrs = $this->ses()->getIdentityVerificationAttributes(['Identities' => [$email]]);
+                if (isset($attrs['VerificationAttributes'][$email])) {
+                    return $this->jsonResponse($response, [
+                        'error' => 'El correo ' . $email . ' ya está registrado en la cuenta de envío por otra instalación. '
+                            . 'Si es tuyo, pide al administrador de la plataforma que lo habilite.',
+                    ], 409);
+                }
+            } catch (\Exception $e) {
+                return $this->jsonResponse($response, ['error' => 'No se pudo consultar Amazon SES', 'message' => $e->getMessage()], 502);
+            }
+        }
+
         try {
             if ($domainVerified) {
                 // Hereda la verificación del dominio: no hace falta confirmar la dirección.
@@ -291,7 +307,11 @@ class SenderVerificationController
         }
 
         $row = $this->repo->findByEmail($email);
-        if ($row !== null && ($row['type'] ?? 'sender') === 'reply') {
+        // Solo remitentes de esta instalación (no se consulta SES por los ajenos).
+        if ($row === null) {
+            return $this->jsonResponse($response, ['error' => 'El remitente no existe'], 404);
+        }
+        if (($row['type'] ?? 'sender') === 'reply') {
             // Reply-To: no se verifica en SES, siempre utilizable.
             $this->repo->updateStatus($email, 'Success');
 
@@ -364,6 +384,15 @@ class SenderVerificationController
                         $existing = $this->repo->findByEmail($email);
                         if ($existing !== null && ($existing['type'] ?? 'sender') === 'reply') {
                             continue; // Reply-To no depende de SES.
+                        }
+                        // Cuenta de AWS compartida: no se importan identidades
+                        // ajenas. Solo se actualizan las que ya son de esta
+                        // instalación, o las de un dominio registrado aquí.
+                        if ($existing === null) {
+                            $emailDomain = strtolower(substr($email, strpos($email, '@') + 1));
+                            if ($this->domains->findByDomain($emailDomain) === null) {
+                                continue;
+                            }
                         }
                         $statusSES = $verificationAttributes['VerificationAttributes'][$email]['VerificationStatus'] ?? 'Unknown';
                         $this->repo->upsert($email, $statusSES);
@@ -453,6 +482,15 @@ class SenderVerificationController
             return false;
         }
 
+        // Solo cuentan los dominios de ESTA instalación. Con una cuenta de AWS
+        // compartida, el dominio de otro cliente también figura como
+        // verificado en SES, y sin esta comprobación se podría crear un
+        // remitente suyo (y enviar en su nombre).
+        $row = $this->domains->findByDomain($domain);
+        if ($row === null) {
+            return false;
+        }
+
         try {
             $attrs = $this->ses()->getIdentityVerificationAttributes([
                 'Identities' => [$domain]
@@ -466,8 +504,6 @@ class SenderVerificationController
             // Degradado a la BD.
         }
 
-        $row = $this->domains->findByDomain($domain);
-
-        return $row !== null && $row['verification_status'] === 'Success';
+        return $row['verification_status'] === 'Success';
     }
 }

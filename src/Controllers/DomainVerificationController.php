@@ -39,13 +39,68 @@ class DomainVerificationController
         return $this->sesClient;
     }
 
+    /**
+     * Varias instalaciones pueden compartir la misma cuenta de AWS. Cada una solo
+     * debe ver y tocar SUS identidades (las registradas en su base de datos):
+     * ninguna acción sobre SES se hace con un dominio que no sea local.
+     */
+    private function localDomain(string $domain): ?array
+    {
+        return $domain === '' ? null : $this->repo->findByDomain($domain);
+    }
+
+    private static function normalizeDomain(string $domain): string
+    {
+        return strtolower(trim($domain, " \t\n\r\0\x0B."));
+    }
+
+    /** ¿Existe ya esta identidad en la cuenta de SES (p.ej. de otra instalación)? */
+    private function existsInSes(string $identity): bool
+    {
+        $attrs = $this->ses()->getIdentityVerificationAttributes(['Identities' => [$identity]]);
+
+        return isset($attrs['VerificationAttributes'][$identity]);
+    }
+
+    public static function allowExistingIdentities(): bool
+    {
+        return filter_var($_ENV['SES_ALLOW_EXISTING_IDENTITIES'] ?? false, FILTER_VALIDATE_BOOLEAN);
+    }
+
+    private function notLocal(Response $response, string $domain): Response
+    {
+        return $this->jsonResponse($response, [
+            'error' => 'El dominio ' . $domain . ' no está registrado en esta instalación.',
+        ], 404);
+    }
+
     public function verifyDomain(Request $request, Response $response): Response
     {
         $data = $request->getParsedBody();
-        $domain = $data['domain'] ?? '';
+        $domain = self::normalizeDomain((string) ($data['domain'] ?? ''));
 
-        if (empty($domain)) {
+        if ($domain === '') {
             return $this->jsonResponse($response, ['error' => 'Domain is required'], 400);
+        }
+        if (!preg_match('/^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/', $domain)) {
+            return $this->jsonResponse($response, ['error' => 'Dominio no válido: ' . $domain], 400);
+        }
+
+        // Si el dominio ya existe en la cuenta de AWS pero no en esta
+        // instalación, pertenece a otro cliente: registrarlo aquí permitiría
+        // luego borrarlo o enviar en su nombre.
+        try {
+            if ($this->localDomain($domain) === null && !self::allowExistingIdentities() && $this->existsInSes($domain)) {
+                return $this->jsonResponse($response, [
+                    'error' => 'El dominio ' . $domain . ' ya está registrado en la cuenta de envío por otra instalación. '
+                        . 'Si es tuyo (p.ej. reinstalación), pide al administrador de la plataforma que lo habilite.',
+                ], 409);
+            }
+        } catch (\Exception $e) {
+            return $this->jsonResponse($response, [
+                'error'   => 'No se pudo consultar Amazon SES',
+                'message' => $e->getMessage(),
+            ], 502);
         }
 
         try {
@@ -85,10 +140,13 @@ class DomainVerificationController
 
     public function checkDomainStatus(Request $request, Response $response, array $args): Response
     {
-        $domain = $args['domain'] ?? '';
+        $domain = self::normalizeDomain((string) ($args['domain'] ?? ''));
 
-        if (empty($domain)) {
+        if ($domain === '') {
             return $this->jsonResponse($response, ['error' => 'Domain is required'], 400);
+        }
+        if ($this->localDomain($domain) === null) {
+            return $this->notLocal($response, $domain);
         }
 
         try {
@@ -173,10 +231,15 @@ class DomainVerificationController
      */
     public function deleteDomain(Request $request, Response $response, array $args): Response
     {
-        $domain = $args['domain'] ?? '';
+        $domain = self::normalizeDomain((string) ($args['domain'] ?? ''));
 
-        if (empty($domain)) {
+        if ($domain === '') {
             return $this->jsonResponse($response, ['error' => 'Se requiere el dominio'], 400);
+        }
+        // Nunca se borra en SES un dominio que no es de esta instalación (la
+        // cuenta de AWS puede ser compartida con otros clientes).
+        if ($this->localDomain($domain) === null) {
+            return $this->notLocal($response, $domain);
         }
 
         $affectedSenders = $this->repo->countSenders($domain);
@@ -219,10 +282,13 @@ class DomainVerificationController
      */
     public function reverifyDomain(Request $request, Response $response, array $args): Response
     {
-        $domain = $args['domain'] ?? '';
+        $domain = self::normalizeDomain((string) ($args['domain'] ?? ''));
 
-        if (empty($domain)) {
+        if ($domain === '') {
             return $this->jsonResponse($response, ['error' => 'Se requiere el dominio'], 400);
+        }
+        if ($this->localDomain($domain) === null) {
+            return $this->notLocal($response, $domain);
         }
 
         try {
