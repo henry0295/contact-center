@@ -376,6 +376,12 @@ upload_max_filesize = 8M
 post_max_size = 20M
 max_file_uploads = 20
 allow_url_fopen = On
+; PHP2Shell (CVE-2026-109619): mitigación recomendada por php.net. La app no
+; usa sesiones PHP (autentica con JWT), así que no pierde nada.
+session.upload_progress.enabled = 0
+; Solo existe en PHP 8.5 (las versiones anteriores ignoran la directiva).
+fatal_error_backtraces = 0
+max_input_vars = 1000
 opcache.enable = 1
 opcache.memory_consumption = 128
 opcache.max_accelerated_files = 20000
@@ -395,6 +401,52 @@ EOF
   systemctl enable "$PHP_FPM_SERVICE" >/dev/null
   systemctl restart "$PHP_FPM_SERVICE"
   ok "PHP $("$PHP_BIN" -r 'echo PHP_VERSION;') ($PHP_FPM_SERVICE)"
+}
+
+# ---------------------------------------------- parches de seguridad PHP ----
+# PHP2Shell (CVE-2026-109618 / CVE-2026-109619, RCE sin autenticación):
+# corregido en 8.2.35, 8.3.36, 8.4.27 y 8.5.12. Las distros pueden aplicar el
+# parche sin cambiar la versión (backport), así que también se busca el CVE en
+# el changelog del paquete.
+PHP_SECURITY_STATUS="sin comprobar"
+
+php_fixed_min() {   # versión mínima corregida para la rama dada (8.3 -> 8.3.36)
+  case "$1" in
+    8.2) echo 8.2.35 ;; 8.3) echo 8.3.36 ;; 8.4) echo 8.4.27 ;; 8.5) echo 8.5.12 ;;
+    *) echo "" ;;
+  esac
+}
+
+update_php_security() {
+  log "Actualizando PHP (parches de seguridad, PHP2Shell CVE-2026-109618/109619)"
+  if [[ "$FAMILY" == rhel ]]; then
+    dnf -y --refresh upgrade 'php*' || warn "dnf no pudo actualizar PHP"
+  else
+    apt-get update -y >/dev/null
+    apt-get install -y --only-upgrade "php${PHPV}-*" || warn "apt no pudo actualizar PHP"
+  fi
+  systemctl restart "$PHP_FPM_SERVICE"
+
+  local ver branch min backport=0
+  ver="$("$PHP_BIN" -r 'echo PHP_VERSION;')"
+  branch="${ver%.*}"
+  min="$(php_fixed_min "$branch")"
+  if [[ "$FAMILY" == rhel ]]; then
+    rpm -q --changelog php-common 2>/dev/null | grep -qE 'CVE-2026-10961[89]' && backport=1
+  else
+    apt-get changelog "php${PHPV}-common" 2>/dev/null | grep -qE 'CVE-2026-10961[89]' && backport=1
+  fi
+
+  if [[ -n "$min" ]] && version_ge "$ver" "$min"; then
+    PHP_SECURITY_STATUS="OK: PHP $ver (corregido desde $min)"
+  elif [[ $backport == 1 ]]; then
+    PHP_SECURITY_STATUS="OK: PHP $ver con el parche de la distribución (backport)"
+  elif [[ -z "$min" ]]; then
+    PHP_SECURITY_STATUS="VULNERABLE: PHP $ver no tiene soporte; pasa a 8.3 o superior"
+  else
+    PHP_SECURITY_STATUS="VULNERABLE: PHP $ver < $min y sin backport. Mitigación aplicada (upload_progress=0); actualiza PHP cuanto antes"
+  fi
+  if [[ "$PHP_SECURITY_STATUS" == VULNERABLE* ]]; then warn "$PHP_SECURITY_STATUS"; else ok "$PHP_SECURITY_STATUS"; fi
 }
 
 # ------------------------------------------------------- usuario y código ----
@@ -1297,6 +1349,7 @@ summary() {
  Contraseña:     $(if [[ "${ADMIN_SEEDED:-0}" == 1 ]]; then echo "sudo grep ^ADMIN_PASSWORD= ${APP_DIR}/.env"; else echo "la que ya tenías (el admin existía y no se modificó)"; fi)
  (cámbiala tras el primer login y vacía ADMIN_PASSWORD en el .env)
 
+ Seguridad PHP:  ${PHP_SECURITY_STATUS}
  API de voz:     ${VOICE_STATUS}
  SMS (IT Cloud): ${SMS_STATUS}
    IP pública de este servidor: $(public_ip)
@@ -1336,6 +1389,7 @@ if [[ "$CMD" == install ]]; then
   ensure_composer
   configure_timezone
   configure_php
+  update_php_security
   setup_user_and_dir
   install_php_deps
   configure_env
@@ -1357,6 +1411,10 @@ if [[ "$CMD" == install ]]; then
 else
   [[ -d "$APP_DIR" && -f "$APP_DIR/.env" ]] || die "No hay instalación en $APP_DIR; usa primero: sudo ./deploy.sh install --host <IP>"
   if [[ "$FAMILY" == debian ]]; then resolve_php_debian; fi
+  # Cada update reaplica la configuración de PHP (mitigaciones) y sus parches.
+  configure_timezone
+  configure_php
+  update_php_security
   ensure_node
   ensure_composer
   fetch_code
