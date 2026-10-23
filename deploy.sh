@@ -57,6 +57,7 @@ VOICE_STATUS="sin configurar"
 # como variables de entorno o se piden por consola.
 SKIP_SMS=0
 SMS_STATUS="sin configurar"
+SKIP_FETCH=0
 # phpMyAdmin en /phpmyadmin/ (se instala por defecto). PMA_ALLOW: lista de
 # IPs/CIDR separadas por comas que pueden abrirlo (vacío = cualquiera, con
 # autenticación básica + login de phpMyAdmin).
@@ -481,6 +482,22 @@ GITHUB_ED25519_FP="SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU"
 
 # Deploy key SSH para el usuario de la app (repos privados).
 ensure_repo_access() {
+  # Primero, ¿hay red hasta GitHub? Sin esto, un firewall que bloquea la
+  # salida se confundía con "repositorio privado" y se intentaba SSH.
+  if [[ "$REPO_URL" == *github.com* ]] && ! curl -fsS -m 10 -o /dev/null https://github.com 2>/dev/null; then
+    local ip
+    ip="$(getent hosts github.com | awk '{print $1; exit}')"
+    printf '\n' >&2
+    warn "Este servidor no puede conectarse a https://github.com (IP resuelta: ${ip:-ninguna})."
+    warn "Revisa el firewall/proxy de salida (puerto 443 hacia github.com y raw.githubusercontent.com)."
+    warn "Si se usa un proxy:  export https_proxy=http://<proxy>:<puerto>  y repite el comando."
+    if [[ "$CMD" == update && -f "$APP_DIR/composer.json" ]]; then
+      warn "Se continúa la actualización con el código que ya está en $APP_DIR (sin git pull)."
+      SKIP_FETCH=1
+      return 0
+    fi
+    die "Sin acceso a GitHub no se puede descargar el código."
+  fi
   if as_app "GIT_TERMINAL_PROMPT=0 git ls-remote '$REPO_URL' >/dev/null 2>&1"; then
     ok "Acceso al repositorio OK ($REPO_URL)"
     return 0
@@ -594,7 +611,9 @@ fetch_code() {
   if [[ -d "$APP_DIR/.git" ]]; then
     chown -R "$APP_USER" "$APP_DIR"
     ensure_repo_access
-    as_app "git -C '$APP_DIR' fetch --prune origin && git -C '$APP_DIR' checkout '$BRANCH' && git -C '$APP_DIR' pull --ff-only origin '$BRANCH'"
+    if [[ "$SKIP_FETCH" != 1 ]]; then
+      as_app "git -C '$APP_DIR' fetch --prune origin && git -C '$APP_DIR' checkout '$BRANCH' && git -C '$APP_DIR' pull --ff-only origin '$BRANCH'"
+    fi
   else
     ensure_repo_access
     if [[ -e "$APP_DIR" && -n "$(ls -A "$APP_DIR" 2>/dev/null)" ]]; then
