@@ -13,6 +13,8 @@
 #   sudo bash deploy.sh                          # install con la IP detectada
 #   sudo bash deploy.sh install --host 192.168.101.95 --https self-signed
 #   sudo bash deploy.sh install --host cc.midominio.com --https letsencrypt --email yo@midominio.com
+#   # Sin puerto 80: Let's Encrypt validando por DNS (cPanel, p.ej. Dongee)
+#   sudo /var/www/contact-center/deploy.sh update --host cc.midominio.com --https letsencrypt-dns --email yo@midominio.com
 #   curl -fsSL <url>/deploy.sh | sudo bash -s -- --https self-signed
 #   sudo /var/www/contact-center/deploy.sh update
 #
@@ -41,7 +43,11 @@ APP_DIR=/var/www/contact-center
 REPO_URL="https://github.com/henry0295/contact-center.git"
 BRANCH="main"
 HOST=""
-HTTPS_MODE=none          # none | self-signed | letsencrypt
+HTTPS_MODE=none          # none | self-signed | letsencrypt | letsencrypt-dns
+# acme.sh (solo --https letsencrypt-dns): versión fijada y verificada por commit.
+ACME_VERSION=3.1.6
+ACME_COMMIT=c6e7807f8e2573bf8b02b71da186b4022afafa56
+ACME_HOME=/root/.acme.sh
 LE_EMAIL=""
 TIMEZONE=""
 ADMIN_EMAIL=""
@@ -84,8 +90,11 @@ usage() {
   cat <<'EOF'
 Opciones:
   --host <IP|dominio>     Dirección del sitio (por defecto, la IP principal del servidor).
-  --https <modo>          none (por defecto) | self-signed | letsencrypt.
-  --email <correo>        Correo para Let's Encrypt (obligatorio con letsencrypt).
+  --https <modo>          none (por defecto) | self-signed | letsencrypt | letsencrypt-dns.
+                          letsencrypt valida por el puerto 80. letsencrypt-dns valida
+                          con un registro TXT en el DNS (cPanel, p.ej. Dongee): no
+                          necesita el puerto 80 abierto y renueva solo.
+  --email <correo>        Correo para Let's Encrypt (obligatorio con letsencrypt/letsencrypt-dns).
   --repo <url>            Repositorio git (por defecto git@github.com:henry0295/contact-center.git).
                           Con una URL https:// pública no hace falta deploy key.
   --branch <rama>         Rama a clonar/actualizar (por defecto main).
@@ -107,6 +116,9 @@ Opciones:
   (IT Cloud / contacto-virtual.com). Si no se dan, se piden por consola.
   Variables GUPSHUP_PARTNER_EMAIL y GUPSHUP_PARTNER_SECRET: credenciales de
   partner de Vozip en Gupshup; activan la línea de WhatsApp (no se guardan).
+  Variables CPANEL_HOSTNAME, CPANEL_USERNAME y CPANEL_APITOKEN (solo
+  letsencrypt-dns): cPanel donde está el DNS del dominio. Si no se dan, se
+  piden por consola. Quedan en /root/.acme.sh (solo root) para renovar.
 EOF
 }
 
@@ -173,7 +185,7 @@ done
 # Validaciones (los valores acaban en configuraciones de Nginx y en sed).
 [[ "$APP_DIR" =~ ^/[A-Za-z0-9._/-]+$ && "$APP_DIR" != "/" ]] || die "--dir no válido: $APP_DIR"
 APP_DIR="${APP_DIR%/}"
-[[ "$HTTPS_MODE" =~ ^(none|self-signed|letsencrypt)$ ]] || die "--https debe ser none, self-signed o letsencrypt"
+[[ "$HTTPS_MODE" =~ ^(none|self-signed|letsencrypt|letsencrypt-dns)$ ]] || die "--https debe ser none, self-signed, letsencrypt o letsencrypt-dns"
 if [[ "$CMD" == install && -z "$HOST" ]]; then
   # Sin --host: IP principal del servidor (la de la ruta por defecto).
   HOST="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i=1; i<NF; i++) if ($i == "src") {print $(i+1); exit}}')"
@@ -186,8 +198,9 @@ if [[ -n "$HOST" ]]; then
 fi
 is_ip() { [[ "$1" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]]; }
 EMAIL_RE='^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'
-if [[ "$HTTPS_MODE" == letsencrypt ]]; then
-  if is_ip "$HOST"; then die "Let's Encrypt no emite certificados para IPs; usa --https self-signed"; fi
+if [[ "$HTTPS_MODE" == letsencrypt || "$HTTPS_MODE" == letsencrypt-dns ]]; then
+  [[ -n "$HOST" ]] || die "--https $HTTPS_MODE necesita --host <dominio>"
+  if is_ip "$HOST"; then die "Let's Encrypt no emite certificados para IPs; usa --host <dominio> o --https self-signed"; fi
   [[ "$LE_EMAIL" =~ $EMAIL_RE ]] || die "--email no válido"
 fi
 if [[ -n "$ADMIN_EMAIL" ]]; then
@@ -986,7 +999,7 @@ nginx_locations() {
     # en línea e imágenes remotas se permiten porque los usan el editor de
     # plantillas y los correos.
     add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https: http:; font-src 'self' data:; connect-src 'self'; frame-src 'self' about: blob: data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'" always;
-$(if [[ "$HTTPS_MODE" == letsencrypt ]]; then echo '    add_header Strict-Transport-Security "max-age=31536000" always;'; fi)
+$(if [[ "$HTTPS_MODE" == letsencrypt || "$HTTPS_MODE" == letsencrypt-dns ]]; then echo '    add_header Strict-Transport-Security "max-age=31536000" always;'; fi)
 
     access_log /var/log/nginx/contact-center.access.log;
     error_log  /var/log/nginx/contact-center.error.log;
@@ -1068,6 +1081,98 @@ self_signed_cert() {
   return 0
 }
 
+# Let's Encrypt validando por DNS (dns-01) con acme.sh y la API de cPanel:
+# no necesita el puerto 80. Las credenciales de cPanel quedan en
+# $ACME_HOME/account.conf (root, 600) para que la renovación sea automática.
+acme_dns_cert() {
+  local dir
+  if [[ "$FAMILY" == rhel ]]; then dir=/etc/pki/contact-center; else dir=/etc/ssl/contact-center; fi
+  SSL_CRT="$dir/le-fullchain.crt"; SSL_KEY="$dir/le.key"
+  install -d -m 755 "$dir"
+  local acme="$ACME_HOME/acme.sh"
+
+  if [[ ! -x "$acme" ]]; then
+    log "Instalando acme.sh $ACME_VERSION"
+    local src
+    src="$(mktemp -d)"
+    git -c advice.detachedHead=false clone -q --depth 1 --branch "$ACME_VERSION" \
+      https://github.com/acmesh-official/acme.sh.git "$src/acme.sh" \
+      || die "No se pudo descargar acme.sh (salida a github.com:443)."
+    [[ "$(git -C "$src/acme.sh" rev-parse HEAD)" == "$ACME_COMMIT" ]] \
+      || { rm -rf "$src"; die "acme.sh $ACME_VERSION no coincide con el commit esperado; se aborta."; }
+    (cd "$src/acme.sh" && ./acme.sh --install --home "$ACME_HOME" --config-home "$ACME_HOME" \
+      --accountemail "$LE_EMAIL" --nocron >/dev/null) || { rm -rf "$src"; die "No se pudo instalar acme.sh"; }
+    rm -rf "$src"
+  fi
+  chmod 700 "$ACME_HOME"
+
+  # Ya emitido: la renovación la hace el timer; aquí no se vuelve a pedir nada.
+  if [[ ! -f "$ACME_HOME/${HOST}_ecc/${HOST}.conf" ]]; then
+    log "Let's Encrypt por DNS (cPanel) para $HOST"
+    local cp_host="${CPANEL_HOSTNAME:-}" cp_user="${CPANEL_USERNAME:-}" cp_token="${CPANEL_APITOKEN:-}"
+    if [[ -z "$cp_host" || -z "$cp_user" || -z "$cp_token" ]]; then
+      { : </dev/tty; } 2>/dev/null \
+        || die "Faltan CPANEL_HOSTNAME, CPANEL_USERNAME y CPANEL_APITOKEN (sin consola para pedirlos)."
+      printf '\ncPanel donde está el DNS de %s (Dongee: cPanel → Seguridad → Manage API Tokens).\n' "$HOST" >/dev/tty
+      [[ -n "$cp_host" ]] || read -r -p "Servidor de cPanel (ej. midominio.com o https://servidor:2083): " cp_host </dev/tty || cp_host=""
+      [[ -n "$cp_user" ]] || read -r -p "Usuario de cPanel: " cp_user </dev/tty || cp_user=""
+      [[ -n "$cp_token" ]] || { read -r -s -p "API token de cPanel (no se muestra): " cp_token </dev/tty || cp_token=""; printf '\n' >/dev/tty; }
+    fi
+    cp_host="${cp_host%/}"
+    [[ "$cp_host" =~ ^https?:// ]] || cp_host="https://$cp_host"
+    [[ "$cp_host" =~ :[0-9]+$ ]] || cp_host="$cp_host:2083"
+    [[ "$cp_host" =~ ^https://[A-Za-z0-9.-]+:[0-9]+$ ]] || die "Servidor de cPanel no válido: $cp_host (usa https://servidor:2083)"
+    [[ "$cp_user" =~ ^[A-Za-z0-9._-]+$ ]] || die "Usuario de cPanel no válido"
+    [[ "$cp_token" =~ ^[A-Za-z0-9]+$ ]] || die "API token de cPanel no válido"
+
+    # El token no va en la línea de comandos: acme.sh lo lee del entorno.
+    local rc=0
+    cPanel_Hostname="$cp_host" cPanel_Username="$cp_user" cPanel_Apitoken="$cp_token" \
+      "$acme" --home "$ACME_HOME" --config-home "$ACME_HOME" --issue --server letsencrypt \
+      --dns dns_cpanel -d "$HOST" --keylength ec-256 || rc=$?
+    # 2 = ya existía y no toca renovar.
+    if [[ $rc != 0 && $rc != 2 ]]; then
+      die "No se pudo emitir el certificado. Revisa el usuario/token de cPanel y que el dominio de $HOST esté en esa cuenta."
+    fi
+  fi
+
+  if [[ ! -s "$SSL_CRT" || ! -s "$SSL_KEY" ]]; then
+    "$acme" --home "$ACME_HOME" --config-home "$ACME_HOME" --install-cert -d "$HOST" --ecc \
+      --key-file "$SSL_KEY" --fullchain-file "$SSL_CRT" \
+      --reloadcmd "systemctl try-reload-or-restart nginx" >/dev/null \
+      || die "No se pudo instalar el certificado de $HOST"
+  fi
+  chmod 600 "$SSL_KEY"
+  selinux_on && restorecon -R "$dir"
+
+  # Renovación: acme.sh --cron a diario (renueva a los 60 días y recarga Nginx).
+  cat > /etc/systemd/system/contact-center-acme.service <<EOF
+[Unit]
+Description=Renovación del certificado de Let's Encrypt (acme.sh, DNS)
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=${acme} --cron --home ${ACME_HOME} --config-home ${ACME_HOME}
+EOF
+  cat > /etc/systemd/system/contact-center-acme.timer <<'EOF'
+[Unit]
+Description=Comprueba a diario la renovación del certificado
+
+[Timer]
+OnCalendar=*-*-* 03:17:00
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+  systemctl daemon-reload
+  systemctl enable --now contact-center-acme.timer >/dev/null
+  ok "Certificado de Let's Encrypt para $HOST (renovación automática por DNS)"
+  return 0
+}
+
 configure_nginx() {
   log "Configurando Nginx para $HOST (HTTPS: $HTTPS_MODE)"
   install -d -m 755 "$PMA_SNIPPET_DIR"   # snippets incluidos por el sitio (phpMyAdmin)
@@ -1091,8 +1196,8 @@ configure_nginx() {
     rm -f /etc/nginx/sites-enabled/default
   fi
 
-  if [[ "$HTTPS_MODE" == self-signed ]]; then
-    self_signed_cert
+  if [[ "$HTTPS_MODE" == self-signed || "$HTTPS_MODE" == letsencrypt-dns ]]; then
+    if [[ "$HTTPS_MODE" == letsencrypt-dns ]]; then acme_dns_cert; else self_signed_cert; fi
     {
       cat <<EOF
 # Gestionado por deploy.sh (Contact Center)

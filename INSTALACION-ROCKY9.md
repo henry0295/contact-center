@@ -892,7 +892,15 @@ sudo systemctl reload php-fpm
 - El cliente abre el **enlace de registro** (válido 5 días; también aparece en WhatsApp → Línea para administradores), entra con su Facebook, elige el portafolio y verifica el número.
 - Otros comandos (los de partner también piden las credenciales): `link [--regenerate]`, `token`, `subscribe` (webhook) y `status` (solo token de la app: `sudo -u nginx php $APP/bin/whatsapp.php status`).
 - Con `deploy.sh`: si se exportan `GUPSHUP_PARTNER_EMAIL`/`GUPSHUP_PARTNER_SECRET`, activa la línea solo (`--wa-name <nombre>`, por defecto el hostname; `--no-whatsapp` lo omite).
-- **Webhook** (estados de entrega, respuestas, aprobación de plantillas): `<APP_URL>/api/webhooks/whatsapp`, autenticado con la cabecera `X-Gupshup-Webhook-Secret`. Requiere **dominio público con https**; por IP privada los envíos salen pero no llegan estados ni respuestas. Tras configurar el dominio: `whatsapp.php subscribe`.
+- **Webhook** (estados de entrega, respuestas, aprobación de plantillas): `<APP_URL>/api/webhooks/whatsapp`, autenticado con la cabecera `X-Gupshup-Webhook-Secret`. Requiere **dominio público con https y certificado válido** (Gupshup rechaza IPs y certificados autofirmados); sin eso los envíos salen pero no llegan estados ni respuestas. Tras configurar el dominio: `whatsapp.php subscribe`.
+- **Dominio sin abrir el puerto 80** (DNS en cPanel, p.ej. Dongee): crea en el Zone Editor el registro A `cc.midominio.com → <IP pública>` y un API token en cPanel → Seguridad → Manage API Tokens. Luego:
+
+  ```bash
+  sudo $APP/deploy.sh update --host cc.midominio.com --https letsencrypt-dns --email soporte@midominio.com
+  sudo -u contactcenter php $APP/bin/whatsapp.php subscribe
+  ```
+
+  `deploy.sh` pide el servidor de cPanel (p.ej. `midominio.com`, puerto 2083 por defecto), el usuario y el token; valida con un registro TXT (acme.sh), instala el certificado en Nginx y lo renueva solo (`contact-center-acme.timer`). Solo se necesita el 443 abierto hacia el servidor. El token queda en `/root/.acme.sh/account.conf` (solo root).
 - **Plantillas**: solo se envían las aprobadas por Meta. El administrador las crea (texto, hasta 3 botones) o las sincroniza en WhatsApp → Plantillas.
 - **Precios** por categoría de plantilla: marketing $90, utilidad $20, autenticación $20 (`credits.php set-price whatsapp_marketing 90`, `whatsapp_utility`, `whatsapp_authentication`). Si WhatsApp informa que no entregó el mensaje, se reembolsa.
 - Quien responda **SALIR / STOP / BAJA** queda dado de baja.
