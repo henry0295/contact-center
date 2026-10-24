@@ -46,7 +46,7 @@ HOST=""
 HTTPS_MODE=none          # none | self-signed | letsencrypt | letsencrypt-dns
 # acme.sh (solo --https letsencrypt-dns): versión fijada y verificada por commit.
 ACME_VERSION=3.1.6
-ACME_COMMIT=c6e7807f8e2573bf8b02b71da186b4022afafa56
+ACME_COMMIT=807da6498377ee5e0cf43a78091f46f12dc59a89   # commit de la etiqueta (refs/tags/3.1.6^{})
 ACME_HOME=/root/.acme.sh
 LE_EMAIL=""
 TIMEZONE=""

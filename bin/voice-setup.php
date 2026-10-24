@@ -47,17 +47,30 @@ function fail(string $msg, int $code = 1): never
     exit($code);
 }
 
-/** Petición JSON sin lanzar excepciones por códigos 4xx/5xx. */
+/**
+ * Petición JSON sin lanzar excepciones por códigos 4xx/5xx.
+ * HTTP 429 (límite de peticiones de la API de voz): reintenta hasta 3 veces,
+ * respetando Retry-After (máx. 30 s).
+ */
 function call(Client $http, string $method, string $path, ?array $json = null, array $headers = []): array
 {
-    try {
-        $res = $http->request($method, ltrim($path, '/'), array_filter([
-            'json'        => $json,
-            'headers'     => $headers + ['Accept' => 'application/json'],
-            'http_errors' => false,
-        ], static fn ($v) => $v !== null));
-    } catch (\Throwable $e) {
-        fail('No se pudo conectar con la API de voz: ' . $e->getMessage());
+    for ($attempt = 1; ; $attempt++) {
+        try {
+            $res = $http->request($method, ltrim($path, '/'), array_filter([
+                'json'        => $json,
+                'headers'     => $headers + ['Accept' => 'application/json'],
+                'http_errors' => false,
+            ], static fn ($v) => $v !== null));
+        } catch (\Throwable $e) {
+            fail('No se pudo conectar con la API de voz: ' . $e->getMessage());
+        }
+        if ($res->getStatusCode() !== 429 || $attempt >= 4) {
+            break;
+        }
+        $wait = (int) $res->getHeaderLine('Retry-After');
+        $wait = $wait > 0 ? min($wait, 30) : 5 * $attempt;
+        out("La API de voz pide esperar (HTTP 429); reintento en {$wait} s...");
+        sleep($wait);
     }
     $data = json_decode((string) $res->getBody(), true);
 
