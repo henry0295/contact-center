@@ -239,8 +239,18 @@ function cmdSubscribe(Client $http, string $base, EnvFile $env): bool
         ],
     ]);
     if ($code >= 400 || ($data['status'] ?? 'success') === 'error') {
-        fail('No se pudo registrar el webhook (' . apiError($data, $raw, $code) . ').');
+        // No se aborta: la app y el token ya quedaron guardados. Gupshup exige
+        // un dominio público con certificado válido (no IP ni autofirmado).
+        fwrite(STDERR, 'AVISO: no se pudo registrar el webhook (' . apiError($data, $raw, $code) . ").\n"
+            . "       Requiere APP_URL con dominio público y certificado válido; luego: php bin/whatsapp.php subscribe\n");
+        $env->set('WHATSAPP_WEBHOOK_URL', '');
+        $env->save();
+
+        return false;
     }
+    // Marca de que Gupshup aceptó el webhook (la pantalla Línea la muestra).
+    $env->set('WHATSAPP_WEBHOOK_URL', $url);
+    $env->save();
     out('Webhook registrado: ' . $url);
 
     return true;
@@ -280,7 +290,8 @@ function cmdStatus(EnvFile $env): int
     } catch (\Throwable $e) {
         fail($e->getMessage());
     }
-    out('Webhook secret: ' . (strlen(envValue($env, 'WHATSAPP_WEBHOOK_SECRET')) >= 24 ? 'configurado' : 'FALTA (ejecuta subscribe)'));
+    $hook = envValue($env, 'WHATSAPP_WEBHOOK_URL');
+    out('Webhook: ' . ($hook !== '' ? 'registrado en ' . $hook : 'NO registrado (ejecuta subscribe con APP_URL https público)'));
 
     return 0;
 }
@@ -297,9 +308,12 @@ switch ($command) {
         cmdLink($http, $base, $env, isset($opts['regenerate']), $name !== '' ? $name : 'cliente', $lang);
         cmdToken($http, $base, $env);
         ensureWebhookSecret($env);
-        cmdSubscribe($http, $base, $env);
+        $webhookOk = cmdSubscribe($http, $base, $env);
         @unlink($env->path() . '.bak');
         out('');
+        if (!$webhookOk) {
+            out('Línea creada SIN webhook: se puede enviar, pero no llegarán estados ni respuestas.');
+        }
         out('Siguiente paso: el cliente abre el enlace, inicia sesión en Facebook, elige su portafolio');
         out('y verifica su número. Después: php bin/whatsapp.php status');
         exit(0);
@@ -317,7 +331,7 @@ switch ($command) {
     case 'subscribe':
         $ok = cmdSubscribe($http, $base, $env);
         @unlink($env->path() . '.bak');
-        exit($ok ? 0 : 2);
+        exit($ok ? 0 : 1);
 
     case 'status':
         exit(cmdStatus($env));

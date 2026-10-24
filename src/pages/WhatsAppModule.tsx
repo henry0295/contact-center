@@ -63,6 +63,12 @@ function countVars(text: string): number {
   return nums.size;
 }
 
+function lineLabel(s: api.WaStatus): string {
+  if (!s.configured) return 'Línea sin activar';
+  if (s.healthy) return 'Línea activa';
+  return s.pendingSignup ? 'Pendiente de registro' : 'Línea con problemas';
+}
+
 const StatusBadge: React.FC<{ status: string }> = ({ status }) => (
   <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_STYLES[status] ?? 'bg-gray-100 text-gray-700'}`}>
     {STATUS_LABELS[status] ?? status}
@@ -162,11 +168,13 @@ const WhatsAppModule: React.FC = () => {
         {status && (
           <span
             className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium ${
-              !status.configured ? 'bg-gray-100 text-gray-700' : status.healthy ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+              !status.configured ? 'bg-gray-100 text-gray-700'
+                : status.healthy ? 'bg-green-100 text-green-800'
+                : status.pendingSignup ? 'bg-amber-100 text-amber-800' : 'bg-red-100 text-red-800'
             }`}
           >
             <Radio className="h-3.5 w-3.5" aria-hidden="true" />
-            {!status.configured ? 'Línea sin activar' : status.healthy ? 'Línea activa' : 'Línea con problemas'}
+            {lineLabel(status)}
           </span>
         )}
       </div>
@@ -354,9 +362,8 @@ const Composer: React.FC<{
           <div>
             <p className="font-medium">La línea de WhatsApp todavía no está activada.</p>
             <p className="mt-1">
-              Revisa la pestaña{' '}
-              <button type="button" onClick={goToLine} className="font-medium underline">Línea</button>{' '}
-              para ver los pasos de activación.
+              Contacta a tu proveedor para activarla. El estado se ve en la pestaña{' '}
+              <button type="button" onClick={goToLine} className="font-medium underline">Línea</button>.
             </p>
           </div>
         </div>
@@ -998,7 +1005,7 @@ const Line: React.FC<{ status: api.WaStatus | null; loading: boolean; isAdmin: b
             ? <CheckCircle2 className="h-5 w-5 text-green-600" aria-hidden="true" />
             : <AlertTriangle className="h-5 w-5 text-amber-500" aria-hidden="true" />}
           <span className="font-medium text-gray-900">
-            {!status.configured ? 'Línea sin activar' : status.healthy ? 'Línea activa' : 'La línea reporta problemas'}
+            {lineLabel(status)}
           </span>
         </div>
         {status.configured && (
@@ -1025,11 +1032,19 @@ const Line: React.FC<{ status: api.WaStatus | null; loading: boolean; isAdmin: b
           </div>
           <div className="rounded-md border border-gray-200 p-4">
             <dt className="text-xs text-gray-500">Webhook (estados y respuestas)</dt>
-            <dd className="mt-1 text-lg font-semibold text-gray-900">{status.webhookConfigured ? 'Configurado' : 'Pendiente'}</dd>
+            <dd className="mt-1 text-lg font-semibold text-gray-900">{status.webhookConfigured ? 'Registrado' : 'Pendiente'}</dd>
+            {!status.webhookConfigured && (
+              <dd className="mt-1 text-xs text-gray-500">Sin esto no llegan estados de entrega ni respuestas.</dd>
+            )}
           </div>
         </dl>
       )}
-      {status.healthMessage && <p className="text-sm text-red-600">{status.healthMessage}</p>}
+      {status.healthMessage && (
+        <p className={`text-sm ${status.pendingSignup ? 'text-amber-700' : 'text-red-600'}`}>
+          {status.healthMessage}
+          {status.healthDetail && <span className="ml-2 text-xs text-gray-400">({status.healthDetail})</span>}
+        </p>
+      )}
       {status.checkedAt && <p className="text-xs text-gray-400">Última comprobación: {new Date(status.checkedAt).toLocaleString('es-CO')}</p>}
 
       {isAdmin && status.onboardingLink && (
@@ -1055,18 +1070,8 @@ const Line: React.FC<{ status: api.WaStatus | null; loading: boolean; isAdmin: b
         </div>
       )}
 
-      {isAdmin && (
-        <div className="rounded-md border border-gray-200 bg-gray-50 p-4 text-sm text-gray-700">
-          <p className="font-medium text-gray-900">Activación (la realiza Vozip en el servidor)</p>
-          <ol className="mt-2 list-decimal space-y-1 pl-5">
-            <li>Vozip ejecuta en el servidor <code className="font-mono text-xs">bin/whatsapp.php activate --name=&lt;cliente&gt;</code>.</li>
-            <li>El cliente abre el enlace de registro y verifica su número.</li>
-            <li>Se sincronizan o crean las plantillas y se envían a aprobación de Meta.</li>
-          </ol>
-          <p className="mt-2 text-xs text-gray-500">
-            Los estados de entrega y las respuestas requieren que el sitio tenga un dominio público con https.
-          </p>
-        </div>
+      {!status.configured && (
+        <p className="text-sm text-gray-600">Para activar la línea de WhatsApp, contacta a tu proveedor.</p>
       )}
     </div>
   );

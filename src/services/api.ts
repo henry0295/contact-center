@@ -434,12 +434,53 @@ export function callFields(): Promise<{ fields: PersonalizationField[]; previous
   return request('/calls/fields');
 }
 
+export type DashboardPeriod = 'today' | '7d' | '30d' | 'month';
+export type DashboardChannel = 'email' | 'sms' | 'call' | 'whatsapp';
+
+export interface DashboardChannelStats {
+  channel: DashboardChannel;
+  sent: number;
+  failed: number;
+  /** Pendientes o llamadas aún marcando. */
+  pending: number;
+  total: number;
+  /** % de enviados sobre enviados + fallidos. */
+  deliveryRate: number;
+}
+
 export interface DashboardStats {
+  period: DashboardPeriod;
+  since: string;
   emailsSent: number;
   smsSent: number;
   totalCampaigns: number;
   activeCampaigns: number;
   recentCampaigns: Campaign[];
+  byChannel: DashboardChannelStats[];
+  spend: {
+    /** Gasto neto del periodo (débitos − reembolsos), en pesos. */
+    total: number;
+    byChannel: Record<DashboardChannel, number>;
+    balance: number;
+    /** Consumo medio diario de los últimos 7 días. */
+    dailyAvg: number;
+    /** Días que alcanza el saldo a ese ritmo (null si no hubo consumo). */
+    daysLeft: number | null;
+    low: boolean;
+  };
+  attention: {
+    replies: number;
+    recentReplies: { channel: 'sms' | 'whatsapp'; phone: string; message: string; receivedAt: string }[];
+    optOuts: number;
+    emailSuppressed: number;
+    upcoming: { id: number; name: string; channel: string; scheduledAt: string; recipients: number }[];
+    failedCampaigns: {
+      id: number; name: string; channel: string; status: string;
+      sent: number; failed: number; total: number; topError: string | null;
+    }[];
+  };
+  /** Solo administradores. */
+  channelsHealth?: { channel: DashboardChannel; label: string; status: 'ok' | 'warning' | 'off'; message: string }[];
 }
 
 // ---------------------------------------------------------------------------
@@ -778,7 +819,12 @@ export interface WaStatus {
   configured: boolean;
   appId: string | null;
   healthy: boolean;
+  /** true mientras el número no se haya registrado con Meta. */
+  pendingSignup?: boolean;
+  /** Mensaje legible para el cliente. */
   healthMessage: string | null;
+  /** Detalle técnico (solo administradores). */
+  healthDetail?: string | null;
   /** Calidad del número según Meta (GREEN, YELLOW, RED). */
   quality: string | null;
   /** Límite de conversaciones iniciadas por día (TIER_1K...). */
@@ -868,8 +914,8 @@ export function listWaReplies(params: { page?: number; perPage?: number; q?: str
 }
 
 // ---- Dashboard ----
-export function getDashboardStats(): Promise<DashboardStats> {
-  return request('/dashboard/stats');
+export function getDashboardStats(period: DashboardPeriod = '30d'): Promise<DashboardStats> {
+  return request('/dashboard/stats' + qs({ period }));
 }
 
 // ---------------------------------------------------------------------------

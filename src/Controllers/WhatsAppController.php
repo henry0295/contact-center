@@ -68,19 +68,43 @@ class WhatsAppController
         }
 
         $link = trim((string) ($_ENV['WHATSAPP_ONBOARDING_LINK'] ?? ''), " \"'");
+        $healthy = (bool) ($cache['health']['healthy'] ?? false);
+        $rawMessage = (string) ($cache['health']['message'] ?? '');
+        $pendingSignup = !$healthy && stripos($rawMessage, 'not live') !== false;
 
         return $this->jsonResponse($response, [
             'configured'       => $configured,
             'appId'            => $configured ? WhatsAppService::appId() : null,
-            'healthy'          => (bool) ($cache['health']['healthy'] ?? false),
-            'healthMessage'    => $cache['health']['message'] ?? null,
+            'healthy'          => $healthy,
+            // true mientras el número no se haya registrado (app en sandbox).
+            'pendingSignup'    => $configured && $pendingSignup,
+            'healthMessage'    => $healthy || $rawMessage === '' ? null : self::friendlyHealth($rawMessage),
+            // El detalle técnico solo para administradores (soporte).
+            'healthDetail'     => $this->isAdmin($request) && !$healthy && $rawMessage !== '' ? $rawMessage : null,
             'quality'          => $cache['ratings']['quality'] ?? null,
             'messagingLimit'   => $cache['ratings']['limit'] ?? null,
             'checkedAt'        => isset($cache['health_at']) ? date('c', (int) $cache['health_at']) : null,
             // Solo se comparte con administradores: es el enlace de alta de la línea.
             'onboardingLink'   => $this->isAdmin($request) && preg_match('#^https://#', $link) ? $link : null,
-            'webhookConfigured' => trim((string) ($_ENV['WHATSAPP_WEBHOOK_SECRET'] ?? '')) !== '',
+            // Solo true si Gupshup aceptó el webhook (bin/whatsapp.php subscribe
+            // guarda WHATSAPP_WEBHOOK_URL al registrarlo).
+            'webhookConfigured' => trim((string) ($_ENV['WHATSAPP_WEBHOOK_SECRET'] ?? '')) !== ''
+                && trim((string) ($_ENV['WHATSAPP_WEBHOOK_URL'] ?? ''), " \"'") !== '',
         ]);
+    }
+
+    /** Traduce los errores de Gupshup sobre la línea a un texto para el cliente. */
+    private static function friendlyHealth(string $raw): string
+    {
+        $m = strtolower($raw);
+
+        return match (true) {
+            str_contains($m, 'not live')                                    => 'Pendiente de registrar el número en WhatsApp.',
+            str_contains($m, 'http 401') || str_contains($m, 'token')       => 'La conexión con WhatsApp no es válida. Contacta a tu proveedor.',
+            str_contains($m, 'no se pudo conectar')                         => 'No se pudo comprobar la línea (sin conexión con el proveedor). Intenta más tarde.',
+            str_contains($m, 'blocked') || str_contains($m, 'restricted')   => 'Meta restringió la línea. Contacta a tu proveedor.',
+            default                                                         => 'La línea reporta un problema. Contacta a tu proveedor si persiste.',
+        };
     }
 
     // ------------------------------------------------------------ plantillas --
