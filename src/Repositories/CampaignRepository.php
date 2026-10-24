@@ -50,10 +50,30 @@ class CampaignRepository
         int $offset,
         ?string $status = null,
         ?string $channel = null,
-        ?string $origin = null
+        ?string $origin = null,
+        array $extra = []
     ): array {
         $conditions = [];
         $params = [];
+
+        // Filtros adicionales: search (nombre o etiquetas), from/to (Y-m-d), createdBy.
+        if (!empty($extra['search'])) {
+            $conditions[] = '(name LIKE :q1 OR tags LIKE :q2)';
+            $params[':q1'] = '%' . $extra['search'] . '%';
+            $params[':q2'] = '%' . $extra['search'] . '%';
+        }
+        if (!empty($extra['from'])) {
+            $conditions[] = 'created_at >= :from';
+            $params[':from'] = $extra['from'] . ' 00:00:00';
+        }
+        if (!empty($extra['to'])) {
+            $conditions[] = 'created_at <= :to';
+            $params[':to'] = $extra['to'] . ' 23:59:59';
+        }
+        if (!empty($extra['createdBy'])) {
+            $conditions[] = 'created_by = :cb';
+            $params[':cb'] = $extra['createdBy'];
+        }
 
         if ($status !== null && $status !== '') {
             $conditions[] = 'status = :status';
@@ -102,12 +122,14 @@ class CampaignRepository
             'INSERT INTO campaigns
                 (name, channel, template_id, subject, body, status, scheduled_at, total_recipients,
                  sender_id, expires_at, tags, segments, cost_estimate, origin, voice_gender, reply_to, sms_type,
-                 wa_template_id, wa_params_json)
+                 wa_template_id, wa_params_json, created_by)
              VALUES
                 (:name, :channel, :template_id, :subject, :body, :status, :scheduled_at, :total,
                  :sender_id, :expires_at, :tags, :segments, :cost, :origin, :voice_gender, :reply_to, :sms_type,
-                 :wa_template_id, :wa_params_json)'
+                 :wa_template_id, :wa_params_json, :created_by)'
         );
+        $createdBy = $data['createdBy'] ?? \App\Support\CurrentUser::email();
+        $stmt->bindValue(':created_by', $createdBy, $createdBy === null ? PDO::PARAM_NULL : PDO::PARAM_STR);
 
         $nullable = static fn ($v): int => $v === null ? PDO::PARAM_NULL : PDO::PARAM_STR;
 

@@ -211,6 +211,12 @@ export interface Campaign {
   origin: 'direct' | 'campaign' | 'test' | string;
   /** Voz de la locución (solo channel 'call'): F femenina, M masculina. */
   voice_gender: 'F' | 'M' | null;
+  /** Email del usuario que la creó (null en campañas antiguas o de consola). */
+  created_by?: string | null;
+  /** Solo en el listado: gasto neto, respuestas y bajas. */
+  spent?: number;
+  replies?: number;
+  opt_outs?: number;
 }
 
 export interface CampaignRecipient {
@@ -221,6 +227,8 @@ export interface CampaignRecipient {
   status: string;
   error: string | null;
   sent_at: string | null;
+  /** WhatsApp: accepted | sent | delivered | read | failed. */
+  delivery_status?: string | null;
 }
 
 export interface BulkResult {
@@ -573,6 +581,31 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   return data as T;
 }
 
+/**
+ * Descarga un archivo autenticado (CSV de reportes). Usa el nombre que envía
+ * el servidor en Content-Disposition; si no hay, `fallbackName`.
+ */
+async function downloadFile(path: string, fallbackName: string): Promise<void> {
+  let res = await rawRequest(path, { method: 'GET' });
+  if (res.status === 401 && (await tryRefresh())) {
+    res = await rawRequest(path, { method: 'GET' });
+  }
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.message || data.error || `Error ${res.status}`);
+  }
+  const blob = await res.blob();
+  const match = /filename="?([^";]+)"?/i.exec(res.headers.get('Content-Disposition') ?? '');
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = match?.[1] ?? fallbackName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 function jsonBody(obj: unknown): string {
   return JSON.stringify(obj);
 }
@@ -739,10 +772,27 @@ export function deleteTemplate(id: number): Promise<{ success: boolean }> {
 // compositores de SMS/Email (sendSms / sendEmailCampaign). Este bloque cubre
 // solo listar, ver el detalle y las acciones sobre una campaña ya creada,
 // que es lo que necesita la pestaña Campañas de Reportes.
+export interface CampaignFilters {
+  status?: string;
+  channel?: string;
+  origin?: string;
+  /** Nombre o etiquetas. */
+  search?: string;
+  /** Y-m-d */
+  from?: string;
+  to?: string;
+  createdBy?: string;
+}
+
 export function listCampaigns(
-  params: PageQuery & { status?: string; channel?: string; origin?: string } = {}
-): Promise<{ campaigns: Campaign[]; pagination: Pagination }> {
+  params: PageQuery & CampaignFilters = {}
+): Promise<{ campaigns: Campaign[]; pagination: Pagination; creators?: string[] }> {
   return request('/campaigns' + qs(params));
+}
+
+/** Descarga de la campaña: destinatarios con estado y motivo (CSV). */
+export function exportCampaign(id: number): Promise<void> {
+  return downloadFile(`/campaigns/${id}/export`, `campana-${id}.csv`);
 }
 /** Cancela la programación: la campaña vuelve a borrador. */
 export function cancelCampaignSchedule(id: number): Promise<{ success: boolean; message: string; campaign: Campaign }> {
@@ -750,6 +800,8 @@ export function cancelCampaignSchedule(id: number): Promise<{ success: boolean; 
 }
 export function getCampaign(id: number): Promise<{
   campaign: Campaign;
+  stats?: CampaignPerformance;
+  failureReasons?: FailureReason[];
   recipients: CampaignRecipient[];
   attachments: { name: string }[];
 }> {
@@ -968,6 +1020,32 @@ export interface ChannelTotals {
   failed: number;
   total: number;
   deliveryRate: number;
+  /** Gasto neto del canal en el periodo (pesos). */
+  spend?: number;
+}
+
+export interface WaFunnel {
+  sent: number;
+  delivered: number;
+  read: number;
+  failed: number;
+  deliveredRate: number;
+  readRate: number;
+}
+
+export interface CallOutcomes {
+  answered: number;
+  busy: number;
+  noAnswer: number;
+  otherFailed: number;
+  dialing: number;
+  answerRate: number;
+}
+
+export interface FailureReason {
+  reason: string;
+  count: number;
+  channel: string | null;
 }
 
 export interface DailyPoint {
@@ -987,6 +1065,16 @@ export interface CampaignPerformance {
   failed: number;
   deliveryRate: number;
   createdAt: string;
+  createdBy?: string | null;
+  /** Gasto neto (pesos). */
+  cost: number;
+  refunded: number;
+  replies: number;
+  optOuts: number;
+  /** % de respuestas sobre enviados. */
+  responseRate: number;
+  funnel: WaFunnel | null;
+  calls: CallOutcomes | null;
 }
 
 export interface FailureRow {
@@ -997,10 +1085,16 @@ export interface FailureRow {
 }
 
 export interface ReportSummary {
-  range: { from: string | null; to: string | null; days: number };
-  totals: { sent: number; failed: number; total: number; deliveryRate: number };
+  range: { from: string | null; to: string | null; days: number; since: string; until: string };
+  totals: { sent: number; failed: number; total: number; deliveryRate: number; spend: number; refunded: number };
+  /** Mismo número de días inmediatamente anterior. */
+  previous: { sent: number; failed: number; total: number; deliveryRate: number; spend: number };
   byChannel: ChannelTotals[];
   dailySeries: DailyPoint[];
+  whatsappFunnel: WaFunnel;
+  callOutcomes: CallOutcomes;
+  replies: { replies: number; optOuts: number };
+  failureReasons: FailureReason[];
   campaigns: { total: number; byStatus: Record<string, number> };
   campaignPerformance: CampaignPerformance[];
   topFailures: FailureRow[];
@@ -1021,10 +1115,20 @@ export function listMessages(
   return request('/messages' + qs(params));
 }
 
-export function getReportSummary(
-  params: { from?: string; to?: string; days?: number } = {}
-): Promise<ReportSummary> {
+export interface ReportRange { from?: string; to?: string; days?: number; search?: string }
+
+export function getReportSummary(params: ReportRange = {}): Promise<ReportSummary> {
   return request('/reports/summary' + qs(params));
+}
+
+export function exportMessages(
+  params: { channel?: string; status?: string; from?: string; to?: string; search?: string } = {}
+): Promise<void> {
+  return downloadFile('/reports/export/messages' + qs(params), 'historial.csv');
+}
+
+export function exportCampaigns(params: ReportRange = {}): Promise<void> {
+  return downloadFile('/reports/export/campaigns' + qs(params), 'campanas.csv');
 }
 
 export function listSuppressions(

@@ -451,6 +451,12 @@ CREATE TABLE IF NOT EXISTS `whatsapp_inbound` (
 
 -- Precios de WhatsApp por categoría de plantilla (pesos). Cambiar con:
 --   php bin/credits.php set-price whatsapp_marketing 90
+-- Usuario (email) que creó la campaña, para filtrar en Reportes.
+ALTER TABLE `campaigns` ADD COLUMN IF NOT EXISTS `created_by` VARCHAR(255) NULL;
+ALTER TABLE `campaigns` ADD INDEX IF NOT EXISTS `idx_campaigns_created_by` (`created_by`);
+ALTER TABLE `credit_transactions` ADD INDEX IF NOT EXISTS `idx_ct_created` (`created_at`);
+ALTER TABLE `campaigns` ADD INDEX IF NOT EXISTS `idx_campaigns_created` (`created_at`);
+
 -- Las claves de WhatsApp superan 16 caracteres: se amplía la columna.
 ALTER TABLE `credit_prices` MODIFY `channel` VARCHAR(32) NOT NULL;
 ALTER TABLE `credit_transactions` MODIFY `channel` VARCHAR(32) NULL;

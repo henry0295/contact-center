@@ -4,7 +4,9 @@ namespace App\Controllers;
 
 use App\Repositories\CampaignRecipientRepository;
 use App\Repositories\CampaignRepository;
+use App\Repositories\ReportRepository;
 use App\Repositories\TemplateRepository;
+use App\Support\Csv;
 use App\Service\CampaignService;
 use App\Service\SendOrchestrator;
 use App\Support\Attachments;
@@ -49,13 +51,58 @@ class CampaignController
         $status = trim($q['status'] ?? '') ?: null;
         $channel = trim($q['channel'] ?? '') ?: null;
         $origin = trim($q['origin'] ?? '') ?: null;
+        $date = static fn (string $k): ?string => preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) ($q[$k] ?? '')) ? (string) $q[$k] : null;
+        $extra = [
+            'search'    => mb_substr(trim((string) ($q['search'] ?? '')), 0, 100) ?: null,
+            'from'      => $date('from'),
+            'to'        => $date('to'),
+            'createdBy' => mb_substr(trim((string) ($q['createdBy'] ?? '')), 0, 255) ?: null,
+        ];
 
-        $result = $this->campaigns->paginate($p->perPage, $p->offset, $status, $channel, $origin);
+        $result = $this->campaigns->paginate($p->perPage, $p->offset, $status, $channel, $origin, $extra);
+
+        // Gasto, respuestas y bajas de cada campaña de la página.
+        $reports = new ReportRepository();
+        $stats = $reports->campaignStats(array_column($result['items'], 'id'));
+        $items = array_map(static function (array $c) use ($stats): array {
+            $s = $stats[(int) $c['id']] ?? [];
+            $c['spent'] = (float) ($s['cost'] ?? 0);
+            $c['replies'] = (int) ($s['replies'] ?? 0);
+            $c['opt_outs'] = (int) ($s['optOuts'] ?? 0);
+
+            return $c;
+        }, $result['items']);
 
         return $this->jsonResponse($response, [
-            'campaigns'  => $result['items'],
+            'campaigns'  => $items,
             'pagination' => $p->meta($result['total']),
+            'creators'   => $reports->creators(),
         ]);
+    }
+
+    /** Destinatarios de la campaña en CSV (estado, entrega y motivo del fallo). */
+    public function export(Request $request, Response $response, array $args): Response
+    {
+        $campaign = $this->campaigns->find((int) ($args['id'] ?? 0));
+        if ($campaign === null) {
+            return $this->jsonResponse($response, ['error' => 'Campaña no encontrada'], 404);
+        }
+        $rows = (function () use ($campaign) {
+            foreach ((new ReportRepository())->recipientsForExport((int) $campaign['id']) as $r) {
+                yield [
+                    $r['email'] ?: $r['phone'],
+                    $r['contact_name'],
+                    ReportController::RECIPIENT_LABELS[$r['status']] ?? $r['status'],
+                    $r['delivery_status'] ? (ReportController::DELIVERY_LABELS[$r['delivery_status']] ?? $r['delivery_status']) : null,
+                    $r['error'],
+                    $r['sent_at'],
+                ];
+            }
+        })();
+        $slug = substr(preg_replace('/[^A-Za-z0-9]+/', '-', (string) $campaign['name']) ?: 'campana', 0, 60);
+
+        return Csv::response($response, 'campana-' . $campaign['id'] . '-' . trim($slug, '-') . '.csv',
+            ['Destinatario', 'Contacto', 'Estado', 'Entrega', 'Motivo del fallo', 'Enviado el'], $rows);
     }
 
     public function show(Request $request, Response $response, array $args): Response
@@ -65,9 +112,14 @@ class CampaignController
             return $this->jsonResponse($response, ['error' => 'Campaña no encontrada'], 404);
         }
 
+        $reports = new ReportRepository();
+        $id = (int) $campaign['id'];
+
         return $this->jsonResponse($response, [
             'campaign'    => $campaign,
-            'recipients'  => $this->recipients->forCampaign((int) $campaign['id']),
+            'stats'       => ReportController::performanceRow($campaign, $reports->campaignStats([$id])[$id] ?? []),
+            'failureReasons' => $reports->failureReasons(null, null, $id, 8),
+            'recipients'  => $this->recipients->forCampaign($id),
             'attachments' => array_map(
                 static fn (array $a): array => ['name' => $a['name']],
                 Attachments::forCampaign((int) $campaign['id'])

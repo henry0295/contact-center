@@ -57,17 +57,23 @@ class JwtMiddleware
             return $this->unauthorized('No se pudo validar la sesión');
         }
 
+        $user = [
+            'id'    => (int) $decoded->sub,
+            'email' => $decoded->email ?? null,
+            'name'  => $decoded->name ?? null,
+            // Rol leído de la BD, no del token (puede haber cambiado).
+            'role'  => $currentRole,
+        ];
         $request = $request
             ->withAttribute('jti', $jti)
-            ->withAttribute('user', [
-                'id'    => (int) $decoded->sub,
-                'email' => $decoded->email ?? null,
-                'name'  => $decoded->name ?? null,
-                // Rol leído de la BD, no del token (puede haber cambiado).
-                'role'  => $currentRole,
-            ]);
+            ->withAttribute('user', $user);
+        \App\Support\CurrentUser::set($user);
 
-        return $handler->handle($request);
+        try {
+            return $handler->handle($request);
+        } finally {
+            \App\Support\CurrentUser::set(null);
+        }
     }
 
     private function unauthorized(string $message): Response

@@ -169,6 +169,7 @@ $app->group('/api', function ($group) {
     $group->post('/campaigns', 'App\Controllers\CampaignController:create');
     $group->post('/campaigns/{id}/send', 'App\Controllers\CampaignController:sendNow');
     $group->post('/campaigns/{id}/cancel', 'App\Controllers\CampaignController:cancelSchedule');
+    $group->get('/campaigns/{id}/export', 'App\Controllers\CampaignController:export');
 
     // Subida de imágenes para los editores
     $group->post('/uploads/image', 'App\Controllers\UploadController:image');
@@ -177,6 +178,9 @@ $app->group('/api', function ($group) {
     $group->get('/messages', 'App\Controllers\ReportController:messages');
     $group->get('/reports/summary', 'App\Controllers\ReportController:summary');
     $group->get('/suppressions', 'App\Controllers\ReportController:suppressions');
+    // Exportación a CSV (Excel).
+    $group->get('/reports/export/messages', 'App\Controllers\ReportController:exportMessages');
+    $group->get('/reports/export/campaigns', 'App\Controllers\ReportController:exportCampaigns');
 
     // Dashboard
     $group->get('/dashboard/stats', 'App\Controllers\DashboardController:stats');
