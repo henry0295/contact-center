@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ShieldCheck, Globe, Mail, Reply, RefreshCw, Star, AlertCircle, Trash2, RotateCcw, Send } from 'lucide-react';
+import { ShieldCheck, Globe, Mail, Reply, RefreshCw, Star, AlertCircle, Trash2, RotateCcw, Send, FileText, FileSpreadsheet } from 'lucide-react';
+import { downloadDnsExcel, downloadDnsPdf } from '../utils/dnsExport';
 import toast from 'react-hot-toast';
 import { useSesData } from '../context/SesDataContext';
 import {
@@ -498,7 +499,29 @@ const Verification: React.FC = () => {
                       </div>
 
                       <div className="mt-4">
-                        <h4 className="text-xs font-semibold text-gray-700 uppercase tracking-wide">Registros DNS a publicar</h4>
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <h4 className="text-xs font-semibold text-gray-700 uppercase tracking-wide">Registros DNS a publicar</h4>
+                          {(d.verification_token || d.dkim_tokens.length > 0) && (
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => { if (!downloadDnsPdf(d)) toast.error('El navegador bloqueó la ventana: permite ventanas emergentes para este sitio.'); }}
+                                aria-label={`Descargar registros DNS de ${d.domain} en PDF`}
+                                className="inline-flex items-center py-1 px-2.5 border border-gray-300 rounded-md text-xs font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                              >
+                                <FileText className="mr-1.5 h-3.5 w-3.5 text-red-600" aria-hidden="true" /> PDF
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => downloadDnsExcel(d)}
+                                aria-label={`Descargar registros DNS de ${d.domain} en Excel`}
+                                className="inline-flex items-center py-1 px-2.5 border border-gray-300 rounded-md text-xs font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                              >
+                                <FileSpreadsheet className="mr-1.5 h-3.5 w-3.5 text-green-700" aria-hidden="true" /> Excel
+                              </button>
+                            </div>
+                          )}
+                        </div>
                         <div className="mt-2 space-y-2">
                           {d.verification_token && (
                             <div className="bg-gray-50 border border-gray-200 rounded p-3 font-mono text-xs text-gray-800 overflow-x-auto">
