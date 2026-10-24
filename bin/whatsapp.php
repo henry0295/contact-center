@@ -101,7 +101,9 @@ function partnerToken(Client $http, string $base): string
         fail('Faltan GUPSHUP_PARTNER_EMAIL y GUPSHUP_PARTNER_SECRET en el entorno (no se guardan en el servidor).', 2);
     }
     [$code, $data, $raw] = call($http, 'POST', $base . '/partner/account/login', [
-        'form_params' => ['email' => $email, 'secret' => $secret],
+        // La documentación de Gupshup usa "secret" en el ejemplo y "password" en
+        // el esquema: se envían ambos (el servidor ignora el que no conoce).
+        'form_params' => ['email' => $email, 'secret' => $secret, 'password' => $secret],
     ]);
     if ($code >= 400 || empty($data['token'])) {
         fail('Gupshup rechazó las credenciales de partner (' . apiError($data, $raw, $code) . ').', 2);
