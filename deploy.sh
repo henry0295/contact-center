@@ -1107,7 +1107,8 @@ acme_dns_cert() {
   chmod 700 "$ACME_HOME"
 
   # Ya emitido: la renovación la hace el timer; aquí no se vuelve a pedir nada.
-  if [[ ! -f "$ACME_HOME/${HOST}_ecc/${HOST}.conf" ]]; then
+  # (Se mira el certificado, no el .conf: un intento fallido también deja el .conf.)
+  if [[ ! -s "$ACME_HOME/${HOST}_ecc/fullchain.cer" ]]; then
     log "Let's Encrypt por DNS (cPanel) para $HOST"
     local cp_host="${CPANEL_HOSTNAME:-}" cp_user="${CPANEL_USERNAME:-}" cp_token="${CPANEL_APITOKEN:-}"
     if [[ -z "$cp_host" || -z "$cp_user" || -z "$cp_token" ]]; then
@@ -1132,6 +1133,9 @@ acme_dns_cert() {
       --dns dns_cpanel -d "$HOST" --keylength ec-256 || rc=$?
     # 2 = ya existía y no toca renovar.
     if [[ $rc != 0 && $rc != 2 ]]; then
+      if ! curl -sS -m 10 -o /dev/null "$cp_host/" 2>/dev/null; then
+        die "No hay conexión con $cp_host desde este servidor. Usa el nombre del servidor de cPanel del hosting (el de la URL con la que entras a cPanel) o pide abrir la salida a ese puerto."
+      fi
       die "No se pudo emitir el certificado. Revisa el usuario/token de cPanel y que el dominio de $HOST esté en esa cuenta."
     fi
   fi
