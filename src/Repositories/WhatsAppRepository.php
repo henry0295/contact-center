@@ -41,6 +41,26 @@ class WhatsAppRepository
         return array_map([$this, 'mapTemplate'], $stmt->fetchAll());
     }
 
+    /**
+     * Cuántas plantillas hay en alguno de esos estados. Lo usa el
+     * sincronizador para consultar a Meta más seguido mientras algo esté en
+     * revisión.
+     *
+     * @param string[] $statuses
+     */
+    public function countByStatus(array $statuses): int
+    {
+        $statuses = array_values(array_filter(array_map('strtoupper', $statuses)));
+        if ($statuses === []) {
+            return 0;
+        }
+        $in = implode(',', array_fill(0, count($statuses), '?'));
+        $stmt = $this->pdo->prepare("SELECT COUNT(*) FROM whatsapp_templates WHERE status IN ($in)");
+        $stmt->execute($statuses);
+
+        return (int) $stmt->fetchColumn();
+    }
+
     public function findTemplate(int $id): ?array
     {
         $stmt = $this->pdo->prepare('SELECT * FROM whatsapp_templates WHERE id = :id');

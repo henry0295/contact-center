@@ -5,7 +5,9 @@
  *
  *   1. Lanza las campañas programadas cuya hora ya llegó.
  *   2. Consume la cola de trabajos (envíos masivos grandes encolados).
- *   3. Tareas de mantenimiento (poda de sesiones, intentos de login y trabajos).
+ *   3. Recoge estados externos: llamadas, eventos de email (SES) y el estado
+ *      de las plantillas de WhatsApp en Meta.
+ *   4. Tareas de mantenimiento (poda de sesiones, intentos de login y trabajos).
  *
  *   composer dispatch
  *   php bin/dispatch-campaigns.php
@@ -144,6 +146,24 @@ try {
         } catch (\Throwable $e) {
             Logger::app()->error('No se pudo leer la cola de eventos de SES', ['error' => $e->getMessage()]);
             out('Eventos de email: ERROR ' . $e->getMessage());
+        }
+    }
+
+    // --- 2.7) Estado de las plantillas de WhatsApp (aprobadas/rechazadas) ---
+    // Meta solo avisa por webhook, que necesita un dominio https público. Para
+    // que el estado se actualice igual, se consulta a Meta cada 5 min mientras
+    // haya alguna en revisión y una vez por hora el resto del tiempo.
+    $waSync = new \App\Service\WaTemplateSyncService();
+    if ($waSync->isConfigured()) {
+        try {
+            $r = $waSync->syncIfDue();
+            foreach ($r === null ? [] : $r['changes'] as $c) {
+                out("Plantilla de WhatsApp '{$c['name']}' ({$c['language']}): {$c['from']} -> {$c['to']}"
+                    . ($c['reason'] !== null ? " — {$c['reason']}" : ''));
+            }
+        } catch (\Throwable $e) {
+            Logger::app()->error('No se pudo sincronizar el estado de las plantillas de WhatsApp', ['error' => $e->getMessage()]);
+            out('Plantillas de WhatsApp: ERROR ' . $e->getMessage());
         }
     }
 

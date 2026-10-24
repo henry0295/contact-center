@@ -996,11 +996,26 @@ export function getWhatsAppStatus(refresh = false): Promise<WaStatus> {
   return request('/whatsapp/status' + (refresh ? '?refresh=1' : ''));
 }
 
-export function listWaTemplates(status?: string): Promise<{ templates: WaTemplate[] }> {
+/** Cambio de estado detectado al comprobar las plantillas en Meta. */
+export interface WaTemplateChange {
+  name: string;
+  language: string;
+  from: string;
+  to: string;
+  reason: string | null;
+}
+
+export function listWaTemplates(status?: string): Promise<{ templates: WaTemplate[]; syncedAt?: string | null }> {
   return request('/whatsapp/templates' + qs({ status }));
 }
 
-export function syncWaTemplates(): Promise<{ success: boolean; synced: number; templates: WaTemplate[] }> {
+export function syncWaTemplates(): Promise<{
+  success: boolean;
+  synced: number;
+  changes?: WaTemplateChange[];
+  syncedAt?: string | null;
+  templates: WaTemplate[];
+}> {
   return request('/whatsapp/templates/sync', { method: 'POST' });
 }
 

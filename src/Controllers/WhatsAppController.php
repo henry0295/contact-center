@@ -8,6 +8,7 @@ use App\Repositories\WhatsAppRepository;
 use App\Service\CreditService;
 use App\Service\InsufficientCreditException;
 use App\Service\SendOrchestrator;
+use App\Service\WaTemplateSyncService;
 use App\Service\WhatsAppService;
 use App\Support\Logger;
 use App\Support\Sms;
@@ -28,12 +29,14 @@ class WhatsAppController
     private WhatsAppService $wa;
     private WhatsAppRepository $repo;
     private SendOrchestrator $orchestrator;
+    private WaTemplateSyncService $sync;
 
-    public function __construct(?WhatsAppService $wa = null, ?WhatsAppRepository $repo = null, ?SendOrchestrator $orchestrator = null)
+    public function __construct(?WhatsAppService $wa = null, ?WhatsAppRepository $repo = null, ?SendOrchestrator $orchestrator = null, ?WaTemplateSyncService $sync = null)
     {
         $this->wa = $wa ?? new WhatsAppService();
         $this->repo = $repo ?? new WhatsAppRepository();
         $this->orchestrator = $orchestrator ?? new SendOrchestrator();
+        $this->sync = $sync ?? new WaTemplateSyncService($this->wa, $this->repo);
     }
 
     // ----------------------------------------------------------------- línea --
@@ -299,46 +302,34 @@ class WhatsAppController
     {
         $only = $request->getQueryParams()['status'] ?? null;
         $only = is_string($only) && $only !== '' ? strtoupper($only) : null;
+        $at = $this->sync->lastSyncAt();
 
-        return $this->jsonResponse($response, ['templates' => $this->repo->templates($only)]);
+        return $this->jsonResponse($response, [
+            'templates' => $this->repo->templates($only),
+            // Última vez que se comprobó el estado contra Meta. El dispatcher
+            // lo hace solo; esto permite mostrarlo en pantalla.
+            'syncedAt'  => $at !== null ? date('c', $at) : null,
+        ]);
     }
 
-    /** Trae de Gupshup todas las plantillas y su estado (admin). */
+    /**
+     * Trae de Gupshup todas las plantillas y su estado (admin). El dispatcher
+     * hace lo mismo cada pocos minutos; este endpoint es para comprobarlo al
+     * instante desde la pantalla.
+     */
     public function syncTemplates(Request $request, Response $response): Response
     {
         try {
-            $remote = $this->wa->listTemplates();
+            $r = $this->sync->sync();
         } catch (\Throwable $e) {
             return $this->jsonResponse($response, ['error' => $e->getMessage()], 502);
         }
 
-        $n = 0;
-        foreach ($remote as $t) {
-            $meta = json_decode((string) ($t['containerMeta'] ?? ''), true) ?: [];
-            $body = (string) ($meta['data'] ?? $t['data'] ?? '');
-            if (($t['elementName'] ?? '') === '' || $body === '') {
-                continue;
-            }
-            $this->repo->upsertTemplate([
-                'external_id'   => (string) ($t['id'] ?? ''),
-                'element_name'  => (string) $t['elementName'],
-                'language'      => (string) ($t['languageCode'] ?? 'es'),
-                'category'      => strtoupper((string) ($t['category'] ?? 'MARKETING')),
-                'template_type' => strtoupper((string) ($t['templateType'] ?? 'TEXT')),
-                'header'        => isset($meta['header']) ? mb_substr((string) $meta['header'], 0, 60) : null,
-                'body'          => $body,
-                'footer'        => isset($meta['footer']) ? mb_substr((string) $meta['footer'], 0, 60) : null,
-                'buttons_json'  => isset($meta['buttons']) ? json_encode($meta['buttons'], JSON_UNESCAPED_UNICODE) : null,
-                'example'       => isset($meta['sampleText']) ? (string) $meta['sampleText'] : null,
-                'status'        => strtoupper((string) ($t['status'] ?? 'PENDING')),
-                'reason'        => isset($t['reason']) ? mb_substr((string) $t['reason'], 0, 500) : null,
-            ]);
-            $n++;
-        }
-
         return $this->jsonResponse($response, [
             'success'   => true,
-            'synced'    => $n,
+            'synced'    => $r['synced'],
+            'changes'   => $r['changes'],
+            'syncedAt'  => date('c', $r['at']),
             'templates' => $this->repo->templates(),
         ]);
     }
@@ -869,15 +860,26 @@ class WhatsAppController
 
     private function onTemplateStatus(array $v): void
     {
-        $event = strtoupper((string) ($v['event'] ?? ''));
+        $raw = trim((string) ($v['event'] ?? ''));
         $key = (string) ($v['message_template_id'] ?? $v['message_template_name'] ?? '');
-        if ($event === '' || $key === '') {
+        if ($raw === '' || $key === '') {
             return;
         }
-        $n = $this->repo->updateTemplateStatus($key, $event, isset($v['reason']) ? mb_substr((string) $v['reason'], 0, 500) : null);
+        // Meta manda el cambio como "event" (APPROVED, REJECTED, FLAGGED...);
+        // se traduce a los estados que guarda la base.
+        $status = WaTemplateSyncService::normalizeStatus($raw);
+        $reason = isset($v['reason']) ? mb_substr((string) $v['reason'], 0, 500) : null;
+        $n = $this->repo->updateTemplateStatus($key, $status, $reason);
         if ($n === 0 && !empty($v['message_template_name'])) {
-            $this->repo->updateTemplateStatus((string) $v['message_template_name'], $event, $v['reason'] ?? null);
+            $n = $this->repo->updateTemplateStatus((string) $v['message_template_name'], $status, $reason);
         }
+        Logger::app()->info('Webhook: nuevo estado de plantilla de WhatsApp', [
+            'plantilla'   => $v['message_template_name'] ?? $key,
+            'evento'      => $raw,
+            'estado'      => $status,
+            'motivo'      => $reason,
+            'actualizadas' => $n,
+        ]);
     }
 
     private function isAdmin(Request $request): bool

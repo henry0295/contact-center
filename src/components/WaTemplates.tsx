@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   RefreshCw, Plus, Trash2, Loader2, BookOpen, Pencil, Copy, Search, X, ExternalLink, Phone, ShieldCheck,
   AlertTriangle, Smartphone, Lightbulb,
@@ -23,6 +23,27 @@ const STATUS: Record<string, { label: string; cls: string }> = {
   REJECTED: { label: 'Rechazada', cls: 'bg-red-100 text-red-800' },
   PAUSED: { label: 'Pausada', cls: 'bg-orange-100 text-orange-800' },
   DISABLED: { label: 'Desactivada', cls: 'bg-gray-200 text-gray-700' },
+  FAILED: { label: 'Fallida', cls: 'bg-red-100 text-red-800' },
+  IN_APPEAL: { label: 'En apelación', cls: 'bg-amber-100 text-amber-800' },
+  LIMIT_EXCEEDED: { label: 'Límite excedido', cls: 'bg-orange-100 text-orange-800' },
+  PENDING_DELETION: { label: 'Borrándose', cls: 'bg-gray-200 text-gray-700' },
+  DELETED: { label: 'Borrada', cls: 'bg-gray-200 text-gray-700' },
+};
+
+/** Estados que todavía pueden cambiar: mientras haya alguno se vuelve a preguntar a Meta. */
+const NOT_FINAL = ['PENDING', 'IN_APPEAL', 'PENDING_DELETION'];
+
+/** Cada cuánto se comprueba en Meta mientras haya una plantilla en revisión. */
+const AUTO_SYNC_MS = 60_000;
+
+/** Qué hacer con cada estado, en lenguaje del cliente. */
+const STATUS_HELP: Record<string, string> = {
+  PENDING: 'Meta la está revisando. Suele tardar de unos minutos a 24 horas; el estado se actualiza solo.',
+  REJECTED: 'Meta la rechazó. Corrige lo que indica el motivo y vuelve a enviarla con el lápiz de editar.',
+  PAUSED: 'Meta la pausó por la reacción de los destinatarios. No se puede enviar hasta que la reactive.',
+  DISABLED: 'Meta la desactivó por calidad baja repetida. Hay que crear una plantilla nueva.',
+  FAILED: 'Meta no pudo procesar la solicitud. Revisa el motivo y vuelve a crearla.',
+  LIMIT_EXCEEDED: 'Se superó el límite de plantillas o de ediciones. Espera o borra alguna que no uses.',
 };
 
 const CATEGORY_TIPS: Record<string, string[]> = {
@@ -536,27 +557,57 @@ const WaTemplates: React.FC<{
   templates: api.WaTemplate[];
   isAdmin: boolean;
   configured: boolean;
+  /** Última comprobación contra Meta, en ISO. */
+  syncedAt?: string | null;
   onChange: (t: api.WaTemplate[]) => void;
+  onSynced?: (at: string | null) => void;
   reload: () => void;
-}> = ({ templates, isAdmin, configured, onChange, reload }) => {
+}> = ({ templates, isAdmin, configured, syncedAt = null, onChange, onSynced, reload }) => {
   const [syncing, setSyncing] = useState(false);
   const [showLibrary, setShowLibrary] = useState(false);
   const [formState, setFormState] = useState<{ initial: TplForm; editing: api.WaTemplate | null } | null>(null);
   const [toDelete, setToDelete] = useState<api.WaTemplate | null>(null);
   const [filter, setFilter] = useState('');
 
-  const sync = async () => {
+  /**
+   * silent = comprobación automática: no avisa de que no hubo cambios ni de
+   * los errores de red, solo de los cambios de estado que trae Meta.
+   */
+  const sync = useCallback(async (silent = false) => {
     setSyncing(true);
     try {
       const r = await api.syncWaTemplates();
       onChange(r.templates);
-      toast.success(`${r.synced} plantilla(s) sincronizada(s) con Meta.`);
+      onSynced?.(r.syncedAt ?? new Date().toISOString());
+      (r.changes ?? []).forEach((c) => {
+        const label = STATUS[c.to]?.label ?? c.to;
+        if (c.to === 'APPROVED') {
+          toast.success(`Meta aprobó la plantilla "${c.name}". Ya puedes enviarla.`, { duration: 8000 });
+        } else {
+          toast.error(`"${c.name}": ${label}${c.reason ? ` — ${c.reason}` : ''}`, { duration: 10000 });
+        }
+      });
+      if (!silent) toast.success(`${r.synced} plantilla(s) comprobada(s) en Meta.`);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'No se pudo sincronizar');
+      if (!silent) toast.error(err instanceof Error ? err.message : 'No se pudo sincronizar');
     } finally {
       setSyncing(false);
     }
-  };
+  }, [onChange, onSynced]);
+
+  // Mientras alguna esté en revisión se vuelve a preguntar a Meta cada minuto,
+  // y también al volver a la pestaña del navegador, para no tener que pulsar
+  // "Sincronizar". El backend lo hace igual desde el dispatcher; esto es para
+  // que se vea sin recargar la página.
+  const hasPending = templates.some((t) => NOT_FINAL.includes(t.status));
+  useEffect(() => {
+    if (!configured || !hasPending) return;
+    const tick = () => { if (document.visibilityState === 'visible') void sync(true); };
+    const id = window.setInterval(tick, AUTO_SYNC_MS);
+    document.addEventListener('visibilitychange', tick);
+
+    return () => { window.clearInterval(id); document.removeEventListener('visibilitychange', tick); };
+  }, [configured, hasPending, sync]);
 
   const openForm = (initial: TplForm, editing: api.WaTemplate | null = null) => {
     setFormState({ initial, editing });
@@ -580,8 +631,8 @@ const WaTemplates: React.FC<{
     <div className="space-y-6 p-6">
       {isAdmin && (
         <div className="flex flex-wrap items-center gap-3">
-          <button type="button" onClick={sync} disabled={syncing || !configured} className="inline-flex items-center rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">
-            <RefreshCw className={`mr-2 h-4 w-4 ${syncing ? 'animate-spin' : ''}`} aria-hidden="true" /> Sincronizar con Meta
+          <button type="button" onClick={() => void sync()} disabled={syncing || !configured} className="inline-flex items-center rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">
+            <RefreshCw className={`mr-2 h-4 w-4 ${syncing ? 'animate-spin' : ''}`} aria-hidden="true" /> Comprobar estado en Meta
           </button>
           <button type="button" onClick={() => setShowLibrary((v) => !v)} disabled={!configured} aria-expanded={showLibrary} className="inline-flex items-center rounded-md border border-green-600 px-4 py-2 text-sm font-medium text-green-700 hover:bg-green-50 disabled:opacity-50">
             <BookOpen className="mr-2 h-4 w-4" aria-hidden="true" /> Biblioteca de ejemplos
@@ -605,7 +656,17 @@ const WaTemplates: React.FC<{
       )}
 
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h3 className="text-sm font-semibold text-gray-900">Tus plantillas ({templates.length})</h3>
+        <div>
+          <h3 className="text-sm font-semibold text-gray-900">Tus plantillas ({templates.length})</h3>
+          {configured && (
+            <p className="mt-0.5 text-xs text-gray-400">
+              {syncedAt
+                ? `Último estado consultado a Meta: ${new Date(syncedAt).toLocaleString('es-CO')}.`
+                : 'El estado aún no se ha consultado a Meta.'}
+              {hasPending && ' Se vuelve a comprobar cada minuto.'}
+            </p>
+          )}
+        </div>
         <select value={filter} onChange={(e) => setFilter(e.target.value)} className="rounded-md border border-gray-300 px-3 py-1.5 text-sm" aria-label="Filtrar por estado">
           <option value="">Todos los estados</option>
           {Object.entries(STATUS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
@@ -638,6 +699,7 @@ const WaTemplates: React.FC<{
                   </p>
                 )}
                 {t.reason && t.status !== 'APPROVED' && <p className="mt-1 text-xs text-red-600">Motivo de Meta: {t.reason}</p>}
+                {STATUS_HELP[t.status] && <p className="mt-1 text-xs text-gray-500">{STATUS_HELP[t.status]}</p>}
               </div>
               {isAdmin && (
                 <div className="flex shrink-0 items-center gap-1">

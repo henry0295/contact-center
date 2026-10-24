@@ -318,7 +318,7 @@ function cmdProbe(EnvFile $env): int
         fail('Faltan GUPSHUP_APP_ID / GUPSHUP_APP_TOKEN en el .env.', 2);
     }
     out('App de Gupshup: ' . WhatsAppService::appId());
-    foreach (['/health', '/waba/info', '/ratings', '/business/profile', '/business/profile/about', '/business/profile/photo'] as $path) {
+    foreach (['/health', '/waba/info', '/ratings', '/templates?pageNo=1&pageSize=5', '/business/profile', '/business/profile/about', '/business/profile/photo'] as $path) {
         out('');
         out('GET ' . $path);
         try {
@@ -328,6 +328,45 @@ function cmdProbe(EnvFile $env): int
         } catch (\Throwable $e) {
             out('  ERROR ' . $e->getMessage());
         }
+    }
+
+    return 0;
+}
+
+/**
+ * Fuerza la comprobación del estado de las plantillas en Meta y muestra el
+ * resultado. El dispatcher hace lo mismo solo cada pocos minutos.
+ */
+function cmdSyncTemplates(EnvFile $env): int
+{
+    foreach (['GUPSHUP_APP_ID', 'GUPSHUP_APP_TOKEN', 'GUPSHUP_BASE_URL'] as $k) {
+        $v = envValue($env, $k);
+        if ($v !== '') {
+            $_ENV[$k] = $v;
+        }
+    }
+    $sync = new \App\Service\WaTemplateSyncService();
+    if (!$sync->isConfigured()) {
+        fail('Faltan GUPSHUP_APP_ID / GUPSHUP_APP_TOKEN en el .env.', 2);
+    }
+    try {
+        $r = $sync->sync();
+    } catch (\Throwable $e) {
+        fail($e->getMessage());
+    }
+    out('Plantillas comprobadas en Meta: ' . $r['synced']);
+    if ($r['changes'] === []) {
+        out('Sin cambios de estado.');
+    }
+    foreach ($r['changes'] as $c) {
+        out('  ' . $c['name'] . ' (' . $c['language'] . '): ' . $c['from'] . ' -> ' . $c['to']
+            . ($c['reason'] !== null ? ' — ' . $c['reason'] : ''));
+    }
+    out('');
+    out('Estado actual:');
+    foreach ((new \App\Repositories\WhatsAppRepository())->templates() as $t) {
+        out('  ' . str_pad((string) $t['status'], 18) . $t['element_name'] . ' (' . $t['language'] . ')'
+            . ($t['reason'] ? ' — ' . $t['reason'] : ''));
     }
 
     return 0;
@@ -376,8 +415,12 @@ switch ($command) {
     case 'probe':
         exit(cmdProbe($env));
 
+    case 'sync-templates':
+        exit(cmdSyncTemplates($env));
+
     default:
-        out('Uso: php bin/whatsapp.php activate --name=<cliente> | link [--regenerate] | token | subscribe | status | probe');
+        out('Uso: php bin/whatsapp.php activate --name=<cliente> | link [--regenerate] | token | subscribe');
+        out('     | status | probe | sync-templates');
         out('Las operaciones de partner requieren GUPSHUP_PARTNER_EMAIL y GUPSHUP_PARTNER_SECRET en el entorno.');
         exit($command === 'help' ? 0 : 2);
 }

@@ -93,6 +93,7 @@ const WhatsAppModule: React.FC = () => {
   const [status, setStatus] = useState<api.WaStatus | null>(null);
   const [statusLoading, setStatusLoading] = useState(false);
   const [templates, setTemplates] = useState<api.WaTemplate[]>([]);
+  const [templatesSyncedAt, setTemplatesSyncedAt] = useState<string | null>(null);
   const [fields, setFields] = useState<api.PersonalizationField[]>([]);
   const [lists, setLists] = useState<api.ContactList[]>([]);
 
@@ -105,7 +106,9 @@ const WhatsAppModule: React.FC = () => {
   }, []);
 
   const loadTemplates = useCallback(() => {
-    api.listWaTemplates().then((r) => setTemplates(r.templates)).catch(() => {});
+    api.listWaTemplates()
+      .then((r) => { setTemplates(r.templates); setTemplatesSyncedAt(r.syncedAt ?? null); })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -173,7 +176,15 @@ const WhatsAppModule: React.FC = () => {
           />
         )}
         {tab === 'templates' && (
-          <WaTemplates templates={templates} isAdmin={isAdmin} configured={status?.configured ?? false} onChange={setTemplates} reload={loadTemplates} />
+          <WaTemplates
+            templates={templates}
+            isAdmin={isAdmin}
+            configured={status?.configured ?? false}
+            syncedAt={templatesSyncedAt}
+            onChange={setTemplates}
+            onSynced={setTemplatesSyncedAt}
+            reload={loadTemplates}
+          />
         )}
         {tab === 'replies' && <Replies />}
         {tab === 'line' && <Line status={status} loading={statusLoading} isAdmin={isAdmin} refresh={() => loadStatus(true)} />}
