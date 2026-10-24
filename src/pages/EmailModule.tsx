@@ -10,6 +10,8 @@ import AttachmentPicker from '../components/AttachmentPicker';
 import { useSesData } from '../context/SesDataContext';
 import { refreshBalance } from '../components/BalanceGauge';
 import SafeHtmlFrame from '../components/SafeHtmlFrame';
+import { LinkCheckPanel, LinkCheckDialog } from '../components/LinkCheckPanel';
+import { useLinkCheck } from '../hooks/useLinkCheck';
 import {
   type RecipientEntry, parseRecipients, parseRecipientsCsv, downloadCsv, EMAIL_HEADERS,
 } from '../utils/csvRecipients';
@@ -67,6 +69,8 @@ const EmailModule: React.FC = () => {
   const [testOpen, setTestOpen] = useState(false);
   const [testEmail, setTestEmail] = useState('');
   const [testSending, setTestSending] = useState(false);
+  // Revisión de links: en vivo mientras se escribe y diálogo al enviar.
+  const [linkDialog, setLinkDialog] = useState<{ data: api.LinkCheckErrorPayload; action: 'send' | 'test' } | null>(null);
 
   // --- Plantillas ---
   const [templates, setTemplates] = useState<api.Template[]>([]);
@@ -103,6 +107,7 @@ const EmailModule: React.FC = () => {
   }, [source, pasteText, csvText, recipient]);
 
   const insertToken = (token: string) => setMessage((m) => m + token);
+  const { result: linkResult, loading: linkLoading } = useLinkCheck(message, tab === 'compose');
 
   const onCsvFile = (file?: File) => {
     if (!file) return;
@@ -180,14 +185,18 @@ const EmailModule: React.FC = () => {
     return payload;
   };
 
-  const submit = async (e: React.FormEvent) => {
+  const submit = (e: React.FormEvent) => {
     e.preventDefault();
+    void doSend(false);
+  };
+
+  const doSend = async (acceptLinkWarnings: boolean) => {
     const payload = validate();
     if (!payload) return;
 
     setSending(true);
     try {
-      const res = await api.sendEmailCampaign({ ...payload, attachments: files });
+      const res = await api.sendEmailCampaign({ ...payload, attachments: files, acceptLinkWarnings: acceptLinkWarnings || undefined });
       if (res.mode === 'sent') {
         if ((res.result?.sent ?? 0) > 0) toast.success(res.message);
         else toast.error(res.hint ?? res.message);
@@ -196,20 +205,22 @@ const EmailModule: React.FC = () => {
       }
       resetAfterSend();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Error al enviar');
+      const lc = api.linkCheckError(err);
+      if (lc) setLinkDialog({ data: lc, action: 'send' });
+      else toast.error(err instanceof Error ? err.message : 'Error al enviar');
     } finally {
       setSending(false);
       refreshBalance();
     }
   };
 
-  const sendTest = async () => {
+  const sendTest = async (acceptLinkWarnings = false) => {
     if (!testEmail.trim()) { toast.error('Indica un correo de prueba.'); return; }
     if (!subject.trim() || !message.trim()) { toast.error('Completa asunto y mensaje antes de probar.'); return; }
 
     setTestSending(true);
     try {
-      const res = await api.sendEmailTest({ to: testEmail.trim(), subject, body: message, replyTo });
+      const res = await api.sendEmailTest({ to: testEmail.trim(), subject, body: message, replyTo, acceptLinkWarnings: acceptLinkWarnings || undefined });
       if (res.success) {
         toast.success(res.message);
         setTestOpen(false);
@@ -218,7 +229,9 @@ const EmailModule: React.FC = () => {
         toast.error(res.hint ?? res.message);
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Error al enviar la prueba');
+      const lc = api.linkCheckError(err);
+      if (lc) setLinkDialog({ data: lc, action: 'test' });
+      else toast.error(err instanceof Error ? err.message : 'Error al enviar la prueba');
     } finally {
       setTestSending(false);
       refreshBalance();
@@ -247,23 +260,16 @@ const EmailModule: React.FC = () => {
   const saveTemplate = async (html: string, designJson: string) => {
     setSavingTpl(true);
     try {
-      if (editing) {
-        await api.updateTemplate(editing.id, {
-          name: newTplName,
-          subject: newTplSubject,
-          body: html,
-          designJson,
-        });
-        toast.success('Plantilla actualizada.');
-      } else {
-        await api.createTemplate({
-          name: newTplName,
-          channel: 'email',
-          subject: newTplSubject,
-          body: html,
-          designJson,
-        });
-        toast.success('Plantilla creada.');
+      const res = editing
+        ? await api.updateTemplate(editing.id, { name: newTplName, subject: newTplSubject, body: html, designJson })
+        : await api.createTemplate({ name: newTplName, channel: 'email', subject: newTplSubject, body: html, designJson });
+      toast.success(editing ? 'Plantilla actualizada.' : 'Plantilla creada.');
+      // La plantilla se guarda igual, pero se avisa si sus links impedirán enviarla.
+      const lc = res.linkCheck;
+      if (lc && lc.errors.length > 0) {
+        toast.error(`La plantilla tiene ${lc.errors.length} link(s) que bloquearán el envío: ${lc.errors[0].message}`, { duration: 8000 });
+      } else if (lc && lc.warnings.length > 0) {
+        toast(`Aviso: ${lc.warnings.length} link(s) pueden enviar el correo a spam. ${lc.warnings[0].message}`, { icon: '⚠️', duration: 7000 });
       }
       setEditorOpen(false);
       setEditing(null);
@@ -456,6 +462,9 @@ const EmailModule: React.FC = () => {
                 onChange={setMessage}
                 placeholder="Escribe tu mensaje. Puedes dar formato, insertar enlaces e imágenes."
               />
+              <div className="mt-2">
+                <LinkCheckPanel result={linkResult} loading={linkLoading} />
+              </div>
             </div>
 
             <div>
@@ -622,7 +631,7 @@ const EmailModule: React.FC = () => {
                 </div>
                 <button
                   type="button"
-                  onClick={sendTest}
+                  onClick={() => sendTest(false)}
                   disabled={testSending}
                   className="inline-flex items-center rounded-md bg-gray-800 px-4 py-2.5 text-sm font-medium text-white hover:bg-gray-900 disabled:opacity-50"
                 >
@@ -725,6 +734,19 @@ const EmailModule: React.FC = () => {
             onClose={() => { setEditorOpen(false); setEditing(null); }}
           />
         </React.Suspense>
+      )}
+
+      {linkDialog && (
+        <LinkCheckDialog
+          data={linkDialog.data}
+          onCancel={() => setLinkDialog(null)}
+          onConfirm={() => {
+            const action = linkDialog.action;
+            setLinkDialog(null);
+            if (action === 'test') void sendTest(true);
+            else void doSend(true);
+          }}
+        />
       )}
 
       {/* Previsualización */}

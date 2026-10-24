@@ -95,6 +95,51 @@ class WhatsAppRepository
         return $stmt->rowCount();
     }
 
+    /** Borra todas las versiones (idiomas) de una plantilla. Meta borra por nombre. */
+    public function deleteTemplatesByName(string $elementName): int
+    {
+        $stmt = $this->pdo->prepare('DELETE FROM whatsapp_templates WHERE element_name = :n');
+        $stmt->execute([':n' => $elementName]);
+
+        return $stmt->rowCount();
+    }
+
+    /**
+     * Campañas programadas o en curso que usan alguna de las plantillas con ese
+     * nombre: borrarla las dejaría sin poder enviarse.
+     *
+     * @return array<int,array{id:int,name:string,status:string}>
+     */
+    public function pendingCampaignsUsing(string $elementName): array
+    {
+        $stmt = $this->pdo->prepare(
+            "SELECT c.id, c.name, c.status FROM campaigns c
+               JOIN whatsapp_templates t ON t.id = c.wa_template_id
+              WHERE t.element_name = :n AND c.status IN ('Scheduled', 'Sending', 'Draft')
+              ORDER BY c.id DESC LIMIT 10"
+        );
+        $stmt->execute([':n' => $elementName]);
+
+        return array_map(static fn ($r) => ['id' => (int) $r['id'], 'name' => (string) $r['name'], 'status' => (string) $r['status']], $stmt->fetchAll());
+    }
+
+    /** Tras editar en Meta: contenido nuevo y vuelve a revisión. */
+    public function updateTemplateContent(int $id, array $t): void
+    {
+        $stmt = $this->pdo->prepare(
+            "UPDATE whatsapp_templates SET category = :category, header = :header, body = :body, footer = :footer,
+                    buttons_json = :buttons, example = :example, var_count = :vars, status = 'PENDING', reason = NULL
+              WHERE id = :id"
+        );
+        foreach (['category' => 'category', 'header' => 'header', 'body' => 'body', 'footer' => 'footer', 'buttons' => 'buttons_json', 'example' => 'example'] as $p => $k) {
+            $v = $t[$k] ?? null;
+            $stmt->bindValue(':' . $p, $v, $v === null ? PDO::PARAM_NULL : PDO::PARAM_STR);
+        }
+        $stmt->bindValue(':vars', (int) ($t['var_count'] ?? self::countVars((string) ($t['body'] ?? ''))), PDO::PARAM_INT);
+        $stmt->bindValue(':id', $id, PDO::PARAM_INT);
+        $stmt->execute();
+    }
+
     public function deleteTemplate(int $id): bool
     {
         $stmt = $this->pdo->prepare('DELETE FROM whatsapp_templates WHERE id = :id');

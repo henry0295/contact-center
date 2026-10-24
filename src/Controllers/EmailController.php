@@ -3,6 +3,8 @@
 namespace App\Controllers;
 
 use App\Repositories\CampaignRepository;
+use App\Service\LinkChecker;
+use App\Service\LinkCheckException;
 use App\Service\SendOrchestrator;
 use App\Support\Attachments;
 use Psr\Http\Message\ResponseInterface as Response;
@@ -93,7 +95,18 @@ class EmailController
                 'attachments'  => $attachments,
                 // Ausente = email de respuesta por defecto; 'none' = ninguno.
                 'replyTo'      => array_key_exists('replyTo', $data) ? $data['replyTo'] : null,
+                // El usuario confirmó los avisos de links (multipart envía "true"/"1").
+                'acceptLinkWarnings' => filter_var($data['acceptLinkWarnings'] ?? false, FILTER_VALIDATE_BOOLEAN),
             ]);
+        } catch (LinkCheckException $e) {
+            Attachments::cleanup($attachments);
+
+            return $this->jsonResponse($response, [
+                'error'             => $e->getMessage(),
+                'code'              => $e->needsConfirmation() ? 'link_warnings' : 'link_blocked',
+                'needsConfirmation' => $e->needsConfirmation(),
+                'linkCheck'         => $e->result(),
+            ], 422);
         } catch (\App\Service\InsufficientCreditException $e) {
             Attachments::cleanup($attachments);
 
@@ -132,6 +145,23 @@ class EmailController
         }
 
         return $this->jsonResponse($response, array_merge($result, ['success' => !$allFailed]), $status);
+    }
+
+    /**
+     * Revisión de links en vivo para el compositor y el editor de plantillas.
+     * body: {body}. No envía nada.
+     */
+    public function checkLinks(Request $request, Response $response): Response
+    {
+        $body = (string) (($request->getParsedBody() ?? [])['body'] ?? '');
+        if (strlen($body) > 2 * 1024 * 1024) {
+            return $this->jsonResponse($response, ['error' => 'El mensaje es demasiado grande.'], 413);
+        }
+        $result = LinkChecker::fromEnvironment()->check($body);
+
+        return $this->jsonResponse($response, $result + [
+            'hasVariableLinks' => LinkChecker::hasVariableLinks($body),
+        ]);
     }
 
     /** Campos personalizados y mensajes anteriores para el compositor. */

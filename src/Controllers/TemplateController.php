@@ -48,7 +48,23 @@ class TemplateController
             $this->designJson($data)
         );
 
-        return $this->jsonResponse($response, ['success' => true, 'template' => $this->templates->find($id)], 201);
+        return $this->jsonResponse($response, [
+            'success'   => true,
+            'template'  => $this->templates->find($id),
+            'linkCheck' => $channel === 'email' ? self::linkSummary($body) : null,
+        ], 201);
+    }
+
+    /** Revisión de links de una plantilla de email (informativa: no impide guardar). */
+    private static function linkSummary(string $body): ?array
+    {
+        try {
+            $r = \App\Service\LinkChecker::fromEnvironment()->check($body);
+
+            return ['errors' => $r['errors'], 'warnings' => $r['warnings']];
+        } catch (\Throwable) {
+            return null;
+        }
     }
 
     public function update(Request $request, Response $response, array $args): Response
@@ -76,7 +92,11 @@ class TemplateController
             $this->designJson($data) ?? ($existing['design_json'] ?? null)
         );
 
-        return $this->jsonResponse($response, ['success' => true, 'template' => $this->templates->find($id)]);
+        return $this->jsonResponse($response, [
+            'success'   => true,
+            'template'  => $this->templates->find($id),
+            'linkCheck' => $existing['channel'] === 'email' ? self::linkSummary($body) : null,
+        ]);
     }
 
     /** Normaliza el diseño del editor de bloques (puede llegar como objeto o cadena). */

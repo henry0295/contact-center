@@ -194,7 +194,8 @@ class CampaignService
                         (string) $waTemplate['element_name'],
                         (string) $waTemplate['language'],
                         $params,
-                        $media
+                        $media,
+                        ($waTemplate['category'] ?? '') === 'AUTHENTICATION'
                     );
                     // Aceptado por Gupshup. La entrega (o el fallo) llega luego
                     // por el webhook; un "failed" allí reembolsa el cobro.

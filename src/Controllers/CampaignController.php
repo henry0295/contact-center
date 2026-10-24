@@ -164,7 +164,15 @@ class CampaignController
                 'expiresAt'    => $data['expiresAt'] ?? null,
                 'templateId'   => $templateId,
                 'origin'       => 'campaign',
+                'acceptLinkWarnings' => filter_var($data['acceptLinkWarnings'] ?? false, FILTER_VALIDATE_BOOLEAN),
             ]);
+        } catch (\App\Service\LinkCheckException $e) {
+            return $this->jsonResponse($response, [
+                'error'             => $e->getMessage(),
+                'code'              => $e->needsConfirmation() ? 'link_warnings' : 'link_blocked',
+                'needsConfirmation' => $e->needsConfirmation(),
+                'linkCheck'         => $e->result(),
+            ], 422);
         } catch (\InvalidArgumentException $e) {
             // 402 = saldo insuficiente (InsufficientCreditException).
             return $this->jsonResponse($response, ['error' => $e->getMessage()], $e instanceof \App\Service\InsufficientCreditException ? 402 : 400);

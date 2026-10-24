@@ -61,7 +61,7 @@ class WhatsAppService
      * @param array{type:string,link:string}|null $headerMedia imagen/video/documento de cabecera
      * @return string id del mensaje en Gupshup (se casa con los eventos del webhook)
      */
-    public function sendTemplate(string $phone, string $templateName, string $language, array $bodyParams = [], ?array $headerMedia = null): string
+    public function sendTemplate(string $phone, string $templateName, string $language, array $bodyParams = [], ?array $headerMedia = null, bool $otp = false): string
     {
         $this->assertConfigured();
 
@@ -78,6 +78,14 @@ class WhatsAppService
                     static fn ($v) => ['type' => 'text', 'text' => self::cleanParam((string) $v)],
                     array_values($bodyParams)
                 ),
+            ];
+        }
+
+        // Autenticación: el código va también en el botón "Copiar código".
+        if ($otp && !empty($bodyParams)) {
+            $components[] = [
+                'type' => 'button', 'sub_type' => 'url', 'index' => '0',
+                'parameters' => [['type' => 'text', 'text' => self::cleanParam((string) array_values($bodyParams)[0])]],
             ];
         }
 
@@ -163,6 +171,14 @@ class WhatsAppService
         if (!empty($t['buttons'])) {
             $form['buttons'] = json_encode($t['buttons'], JSON_UNESCAPED_UNICODE);
         }
+        // Autenticación: texto fijo de Meta; solo opciones de seguridad y vencimiento.
+        if (($t['category'] ?? '') === 'AUTHENTICATION') {
+            unset($form['header'], $form['exampleHeader'], $form['footer']);
+            $form['addSecurityRecommendation'] = !empty($t['addSecurityRecommendation']) ? 'true' : 'false';
+            if (!empty($t['codeExpirationMinutes'])) {
+                $form['codeExpirationMinutes'] = (string) (int) $t['codeExpirationMinutes'];
+            }
+        }
 
         [$code, $data, $raw] = $this->request('POST', '/templates', ['form_params' => $form]);
         if ($code >= 400 || ($data['status'] ?? '') !== 'success') {
@@ -170,6 +186,38 @@ class WhatsAppService
         }
 
         return is_array($data['template'] ?? null) ? $data['template'] : [];
+    }
+
+    /**
+     * Edita una plantilla existente (vuelve a revisión de Meta). Meta permite
+     * editar las aprobadas hasta 10 veces en 30 días y una vez cada 24 h, sin
+     * cambiar la categoría.
+     *
+     * @param array<string,string> $form content, category, templateType, example, header, footer, buttons
+     */
+    public function editTemplate(string $templateId, array $form): void
+    {
+        $this->assertConfigured();
+        [$code, $data, $raw] = $this->request('PUT', '/templates/' . rawurlencode($templateId), [
+            'form_params' => $form + ['enableSample' => 'true'],
+        ]);
+        if ($code >= 400 || ($data['status'] ?? '') === 'error') {
+            throw new \RuntimeException(self::errorMessage($data, $raw, $code));
+        }
+    }
+
+    /**
+     * Borra la plantilla en Meta (todas sus versiones de idioma). Irreversible;
+     * Meta no deja reutilizar el nombre durante 30 días. No funciona con la
+     * app en sandbox.
+     */
+    public function deleteRemoteTemplate(string $elementName): void
+    {
+        $this->assertConfigured();
+        [$code, $data, $raw] = $this->request('DELETE', '/template/' . rawurlencode($elementName));
+        if ($code >= 400 || ($data['status'] ?? '') === 'error') {
+            throw new \RuntimeException(self::errorMessage($data, $raw, $code));
+        }
     }
 
     /** @return array{healthy:bool,message:?string} */

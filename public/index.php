@@ -104,6 +104,7 @@ $app->group('/api', function ($group) {
         $admin->post('/whatsapp/templates', 'App\Controllers\WhatsAppController:createTemplate');
         $admin->post('/whatsapp/templates/sync', 'App\Controllers\WhatsAppController:syncTemplates');
         $admin->delete('/whatsapp/templates/{id}', 'App\Controllers\WhatsAppController:deleteTemplate');
+        $admin->put('/whatsapp/templates/{id}', 'App\Controllers\WhatsAppController:editTemplate');
         // WhatsApp: perfil de empresa (lo ven los clientes en WhatsApp).
         $admin->get('/whatsapp/profile', 'App\Controllers\WhatsAppController:profile');
         $admin->post('/whatsapp/profile', 'App\Controllers\WhatsAppController:updateProfile');
@@ -122,6 +123,7 @@ $app->group('/api', function ($group) {
     $group->post('/email/send-bulk', 'App\Controllers\EmailController:sendBulk');
     $group->post('/email/test', 'App\Controllers\EmailController:test');
     $group->get('/email/fields', 'App\Controllers\EmailController:fields');
+    $group->post('/email/check-links', 'App\Controllers\EmailController:checkLinks');
     $group->post('/sms/send', 'App\Controllers\SmsController:send');
     $group->post('/sms/send-bulk', 'App\Controllers\SmsController:sendBulk');
     $group->post('/sms/test', 'App\Controllers\SmsController:test');

@@ -160,7 +160,64 @@ class SendOrchestrator
             }
         }
 
+        // Email: revisión de links ANTES de registrar nada (bloquea phishing y
+        // pide confirmación para los avisos). Ver LinkChecker.
+        $linkChecker = null;
+        $linkWarnings = [];
+        if ($channel === 'email') {
+            $linkChecker = $this->linkChecker ?? LinkChecker::fromEnvironment();
+            $check = $linkChecker->check($body);
+            if (!empty($check['errors'])) {
+                throw new LinkCheckException(self::linkMessage($check['errors'], true), $check, false);
+            }
+            $linkWarnings = $check['warnings'];
+        }
+
         $recipients = $this->resolveRecipients($channel, $input);
+
+        // Links con variables del CSV (href="{{link_pago}}"): se revisa el link
+        // ya personalizado de cada fila.
+        if ($linkChecker !== null && LinkChecker::hasVariableLinks($body)) {
+            $rowErrors = [];
+            foreach ($recipients as $r) {
+                if (empty($r['vars'])) {
+                    continue;
+                }
+                $rc = $linkChecker->check(Sms::renderFields($body, [], $r['vars']));
+                foreach ($rc['errors'] as $e) {
+                    $rowErrors[] = $e + ['recipient' => $r['email'] ?? null];
+                }
+                foreach ($rc['warnings'] as $w) {
+                    $linkWarnings[] = $w;
+                }
+                if (count($rowErrors) >= 20) {
+                    break;
+                }
+            }
+            if (!empty($rowErrors)) {
+                throw new LinkCheckException(
+                    self::linkMessage($rowErrors, true) . ' (en ' . count(array_unique(array_column($rowErrors, 'recipient'))) . ' fila(s) del CSV)',
+                    ['errors' => $rowErrors, 'warnings' => []],
+                    false
+                );
+            }
+        }
+        if (!empty($linkWarnings)) {
+            // Un aviso por regla y URL, aunque se repita en muchas filas.
+            $linkWarnings = array_values(array_reduce($linkWarnings, static function (array $acc, array $w) {
+                $acc[$w['rule'] . '|' . $w['url']] = $w;
+
+                return $acc;
+            }, []));
+            if (empty($input['acceptLinkWarnings'])) {
+                throw new LinkCheckException(self::linkMessage($linkWarnings, false), ['errors' => [], 'warnings' => $linkWarnings], true);
+            }
+            Logger::audit()->info('Avisos de links aceptados al enviar un email', [
+                'avisos' => array_map(static fn ($w) => $w['rule'] . ': ' . $w['url'], array_slice($linkWarnings, 0, 20)),
+                'por'    => \App\Support\CurrentUser::email(),
+            ]);
+        }
+
         if (empty($recipients)) {
             throw new \InvalidArgumentException(
                 $channel === 'email'
@@ -314,6 +371,23 @@ class SendOrchestrator
         }
 
         return (string) $row['email'];
+    }
+
+    private ?LinkChecker $linkChecker = null;
+
+    /** Para pruebas: inyectar el revisor de links. */
+    public function setLinkChecker(LinkChecker $checker): void
+    {
+        $this->linkChecker = $checker;
+    }
+
+    private static function linkMessage(array $issues, bool $blocking): string
+    {
+        $first = $issues[0]['message'] ?? '';
+        $n = count($issues);
+
+        return ($blocking ? 'No se envió: el email tiene ' . $n . ' link(s) bloqueado(s). ' : 'El email tiene ' . $n . ' aviso(s) en sus links. ')
+            . $first . ($n > 1 ? ' (y ' . ($n - 1) . ' más)' : '');
     }
 
     /** Nombre automático con el formato del compositor: SMS-2026-10-06-17:10:49 */

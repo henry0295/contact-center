@@ -317,6 +317,8 @@ export interface DispatchPayload {
    * Reply-To; o una de las direcciones registradas como email de respuesta.
    */
   replyTo?: string;
+  /** Solo email: el usuario confirmó los avisos de la revisión de links. */
+  acceptLinkWarnings?: boolean;
 }
 
 export interface PersonalizationField {
@@ -402,6 +404,7 @@ export function sendEmailCampaign(
     if (payload.expiresAt) form.append('expiresAt', payload.expiresAt);
     if (payload.templateId) form.append('templateId', String(payload.templateId));
     if (payload.replyTo !== undefined) form.append('replyTo', payload.replyTo);
+    if (payload.acceptLinkWarnings) form.append('acceptLinkWarnings', 'true');
     payload.attachments.forEach((f) => form.append('attachments[]', f));
     return request('/email/send', { method: 'POST', body: form });
   }
@@ -410,8 +413,44 @@ export function sendEmailCampaign(
   return request('/email/send', { method: 'POST', body: jsonBody(rest) });
 }
 
-export function sendEmailTest(payload: { to: string; subject: string; body: string; replyTo?: string }): Promise<DispatchResponse> {
+export function sendEmailTest(payload: { to: string; subject: string; body: string; replyTo?: string; acceptLinkWarnings?: boolean }): Promise<DispatchResponse> {
   return request('/email/test', { method: 'POST', body: jsonBody(payload) });
+}
+
+// ---- Revisión de links del email ----
+export interface LinkIssue {
+  url: string;
+  text: string | null;
+  /** dangerous_scheme, ip_address, userinfo, deceptive_text, insecure, shortener, foreign_domain... */
+  rule: string;
+  message: string;
+  /** Solo en errores por fila del CSV. */
+  recipient?: string | null;
+}
+
+export interface LinkCheckResult {
+  links: { url: string; text: string | null; status: 'ok' | 'warning' | 'error' }[];
+  errors: LinkIssue[];
+  warnings: LinkIssue[];
+  /** Hay links con variables ({{link_pago}}): se revisan por fila al enviar. */
+  hasVariableLinks?: boolean;
+}
+
+export function checkEmailLinks(body: string): Promise<LinkCheckResult> {
+  return request('/email/check-links', { method: 'POST', body: jsonBody({ body }) });
+}
+
+/** Datos de un 422 de la revisión de links (error.payload de request()). */
+export interface LinkCheckErrorPayload {
+  error: string;
+  code: 'link_blocked' | 'link_warnings';
+  needsConfirmation: boolean;
+  linkCheck: { errors: LinkIssue[]; warnings: LinkIssue[] };
+}
+
+export function linkCheckError(err: unknown): LinkCheckErrorPayload | null {
+  const p = (err as { payload?: unknown } | null)?.payload as Partial<LinkCheckErrorPayload> | undefined;
+  return p && (p.code === 'link_blocked' || p.code === 'link_warnings') && p.linkCheck ? (p as LinkCheckErrorPayload) : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -757,10 +796,10 @@ export function importContacts(file: File, listId?: number): Promise<{ success: 
 export function listTemplates(channel?: 'email' | 'sms'): Promise<{ templates: Template[] }> {
   return request(`/templates${channel ? `?channel=${channel}` : ''}`);
 }
-export function createTemplate(payload: { name: string; channel: 'email' | 'sms'; subject?: string; body: string; designJson?: string }): Promise<{ success: boolean; template: Template }> {
+export function createTemplate(payload: { name: string; channel: 'email' | 'sms'; subject?: string; body: string; designJson?: string }): Promise<{ success: boolean; template: Template; linkCheck?: { errors: LinkIssue[]; warnings: LinkIssue[] } | null }> {
   return request('/templates', { method: 'POST', body: jsonBody(payload) });
 }
-export function updateTemplate(id: number, payload: { name: string; subject?: string; body: string; designJson?: string }): Promise<{ success: boolean; template: Template }> {
+export function updateTemplate(id: number, payload: { name: string; subject?: string; body: string; designJson?: string }): Promise<{ success: boolean; template: Template; linkCheck?: { errors: LinkIssue[]; warnings: LinkIssue[] } | null }> {
   return request(`/templates/${id}`, { method: 'PUT', body: jsonBody(payload) });
 }
 export function deleteTemplate(id: number): Promise<{ success: boolean }> {
@@ -840,9 +879,18 @@ export function getBalance(): Promise<Balance> {
 export type WaCategory = 'MARKETING' | 'UTILITY' | 'AUTHENTICATION';
 
 export interface WaButton {
-  type: 'QUICK_REPLY' | 'URL' | string;
+  type: 'QUICK_REPLY' | 'URL' | 'PHONE_NUMBER' | 'OTP' | string;
   text: string;
   url?: string;
+  phone_number?: string;
+}
+
+export interface WaAuthOptions {
+  /** Añade "Por tu seguridad, no compartas este código". */
+  securityRecommendation: boolean;
+  /** 1-90; añade "Este código vence en N minutos". */
+  expirationMinutes?: number | null;
+  buttonText: string;
 }
 
 export interface WaTemplate {
@@ -925,6 +973,8 @@ export interface WaTemplateInput {
   /** Un ejemplo por variable, en orden. */
   examples: string[];
   buttons?: WaButton[];
+  /** Solo AUTHENTICATION (el texto lo fija Meta). */
+  auth?: WaAuthOptions;
 }
 
 export function getWhatsAppStatus(refresh = false): Promise<WaStatus> {
@@ -943,8 +993,18 @@ export function createWaTemplate(payload: WaTemplateInput): Promise<{ success: b
   return request('/whatsapp/templates', { method: 'POST', body: jsonBody(payload) });
 }
 
-export function deleteWaTemplate(id: number): Promise<{ success: boolean }> {
-  return request(`/whatsapp/templates/${id}`, { method: 'DELETE' });
+/**
+ * remote=false: solo la quita de la lista (reaparece al sincronizar).
+ * remote=true: la borra en Meta (irreversible, todos sus idiomas; el nombre
+ * no se puede reutilizar durante 30 días).
+ */
+export function deleteWaTemplate(id: number, remote = false): Promise<{ success: boolean; message?: string; deleted?: number }> {
+  return request(`/whatsapp/templates/${id}${remote ? '?remote=1' : ''}`, { method: 'DELETE' });
+}
+
+/** Edita y reenvía a revisión de Meta (rechazadas, pausadas o aprobadas). */
+export function editWaTemplate(id: number, payload: Omit<WaTemplateInput, 'name' | 'language'>): Promise<{ success: boolean; message: string; template: WaTemplate }> {
+  return request(`/whatsapp/templates/${id}`, { method: 'PUT', body: jsonBody(payload) });
 }
 
 export function sendWhatsApp(payload: WaSendPayload): Promise<DispatchResponse> {

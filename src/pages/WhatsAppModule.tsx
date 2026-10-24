@@ -1,13 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Send, Loader2, Users, Tag, Clock, CalendarX, FileText, Trash2, TestTube2, Smartphone,
-  Sparkles, Download, MessageSquareReply, RefreshCw, Plus, Radio, Copy, ExternalLink,
+  Send, Loader2, Users, Tag, Clock, CalendarX, FileText, TestTube2, Smartphone,
+  Sparkles, Download, MessageSquareReply, RefreshCw, Radio, Copy, ExternalLink,
   CheckCircle2, AlertTriangle, Search, Building2, Upload, Globe, Mail, MapPin,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as api from '../services/api';
 import { useUser } from '../context/UserContext';
 import { refreshBalance } from '../components/BalanceGauge';
+import WaTemplates from '../components/WaTemplates';
 import {
   type RecipientEntry, parseRecipients, parseRecipientsCsv, downloadCsv, PHONE_HEADERS,
 } from '../utils/csvRecipients';
@@ -20,20 +21,6 @@ const CATEGORY_LABELS: Record<string, string> = {
   MARKETING: 'Marketing',
   UTILITY: 'Utilidad',
   AUTHENTICATION: 'Autenticación',
-};
-const STATUS_STYLES: Record<string, string> = {
-  APPROVED: 'bg-green-100 text-green-800',
-  PENDING: 'bg-amber-100 text-amber-800',
-  REJECTED: 'bg-red-100 text-red-800',
-  PAUSED: 'bg-orange-100 text-orange-800',
-  DISABLED: 'bg-gray-200 text-gray-700',
-};
-const STATUS_LABELS: Record<string, string> = {
-  APPROVED: 'Aprobada',
-  PENDING: 'En revisión',
-  REJECTED: 'Rechazada',
-  PAUSED: 'Pausada',
-  DISABLED: 'Desactivada',
 };
 
 const inputClass =
@@ -56,24 +43,11 @@ function fillBody(body: string, params: string[]): string {
   });
 }
 
-/** Cuenta las variables {{n}} distintas de un texto. */
-function countVars(text: string): number {
-  const nums = new Set<number>();
-  for (const m of text.matchAll(/\{\{\s*(\d+)\s*\}\}/g)) nums.add(Number(m[1]));
-  return nums.size;
-}
-
 function lineLabel(s: api.WaStatus): string {
   if (!s.configured) return 'Línea sin activar';
   if (s.healthy) return 'Línea activa';
   return s.pendingSignup ? 'Pendiente de registro' : 'Línea con problemas';
 }
-
-const StatusBadge: React.FC<{ status: string }> = ({ status }) => (
-  <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_STYLES[status] ?? 'bg-gray-100 text-gray-700'}`}>
-    {STATUS_LABELS[status] ?? status}
-  </span>
-);
 
 /** Previsualización estilo WhatsApp. */
 const WaPreview: React.FC<{ template: api.WaTemplate | null; params: string[]; mediaUrl: string }> = ({ template, params, mediaUrl }) => (
@@ -199,7 +173,7 @@ const WhatsAppModule: React.FC = () => {
           />
         )}
         {tab === 'templates' && (
-          <Templates templates={templates} isAdmin={isAdmin} configured={status?.configured ?? false} onChange={setTemplates} reload={loadTemplates} />
+          <WaTemplates templates={templates} isAdmin={isAdmin} configured={status?.configured ?? false} onChange={setTemplates} reload={loadTemplates} />
         )}
         {tab === 'replies' && <Replies />}
         {tab === 'line' && <Line status={status} loading={statusLoading} isAdmin={isAdmin} refresh={() => loadStatus(true)} />}
@@ -620,288 +594,6 @@ const Composer: React.FC<{
         </div>
       </div>
     </form>
-  );
-};
-
-// --------------------------------------------------------- Plantillas -----
-
-interface TplForm {
-  name: string;
-  category: api.WaCategory;
-  language: string;
-  header: string;
-  body: string;
-  footer: string;
-  examples: string[];
-  buttons: api.WaButton[];
-}
-
-const emptyForm: TplForm = {
-  name: '', category: 'UTILITY', language: 'es', header: '', body: '', footer: '', examples: [], buttons: [],
-};
-
-const Templates: React.FC<{
-  templates: api.WaTemplate[];
-  isAdmin: boolean;
-  configured: boolean;
-  onChange: (t: api.WaTemplate[]) => void;
-  reload: () => void;
-}> = ({ templates, isAdmin, configured, onChange, reload }) => {
-  const [syncing, setSyncing] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState<TplForm>(emptyForm);
-  const vars = countVars(form.body);
-
-  useEffect(() => {
-    setForm((f) => (f.examples.length === vars ? f : { ...f, examples: Array.from({ length: vars }, (_, i) => f.examples[i] ?? '') }));
-  }, [vars]);
-
-  const sync = async () => {
-    setSyncing(true);
-    try {
-      const r = await api.syncWaTemplates();
-      onChange(r.templates);
-      toast.success(`${r.synced} plantilla(s) sincronizada(s) con Meta.`);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'No se pudo sincronizar');
-    } finally {
-      setSyncing(false);
-    }
-  };
-
-  const save = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSaving(true);
-    try {
-      const r = await api.createWaTemplate({
-        name: form.name.trim(),
-        category: form.category,
-        language: form.language.trim(),
-        header: form.header.trim() || undefined,
-        body: form.body.trim(),
-        footer: form.footer.trim() || undefined,
-        examples: form.examples,
-        buttons: form.buttons.length ? form.buttons : undefined,
-      });
-      toast.success(r.message);
-      setForm(emptyForm);
-      setShowForm(false);
-      reload();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'No se pudo crear la plantilla');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const remove = async (t: api.WaTemplate) => {
-    if (!window.confirm(`¿Quitar "${t.element_name}" de la lista? (No se borra en Meta; reaparece al sincronizar.)`)) return;
-    try {
-      await api.deleteWaTemplate(t.id);
-      reload();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Error');
-    }
-  };
-
-  const setButton = (i: number, patch: Partial<api.WaButton>) =>
-    setForm((f) => ({ ...f, buttons: f.buttons.map((b, j) => (j === i ? { ...b, ...patch } : b)) }));
-
-  return (
-    <div className="space-y-6 p-6">
-      {isAdmin && (
-        <div className="flex flex-wrap items-center gap-3">
-          <button
-            type="button"
-            onClick={sync}
-            disabled={syncing || !configured}
-            className="inline-flex items-center rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-          >
-            <RefreshCw className={`mr-2 h-4 w-4 ${syncing ? 'animate-spin' : ''}`} aria-hidden="true" /> Sincronizar con Meta
-          </button>
-          <button
-            type="button"
-            onClick={() => setShowForm((v) => !v)}
-            disabled={!configured}
-            className="inline-flex items-center rounded-md bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50"
-          >
-            <Plus className="mr-2 h-4 w-4" aria-hidden="true" /> Nueva plantilla
-          </button>
-          {!configured && <span className="text-xs text-gray-500">Activa la línea para gestionar plantillas.</span>}
-        </div>
-      )}
-
-      {isAdmin && showForm && (
-        <form onSubmit={save} className="space-y-4 rounded-md border border-gray-200 p-4">
-          <h3 className="text-sm font-semibold text-gray-900">Nueva plantilla de texto</h3>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-            <div>
-              <label htmlFor="tplName" className={labelClass}>Nombre *</label>
-              <input
-                id="tplName"
-                type="text"
-                value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '_') })}
-                className={inputClass}
-                placeholder="recordatorio_pago"
-                required
-              />
-            </div>
-            <div>
-              <label htmlFor="tplCategory" className={labelClass}>Categoría *</label>
-              <select id="tplCategory" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value as api.WaCategory })} className={inputClass}>
-                <option value="UTILITY">Utilidad (avisos, pagos, citas)</option>
-                <option value="MARKETING">Marketing (promociones)</option>
-                <option value="AUTHENTICATION">Autenticación (códigos)</option>
-              </select>
-            </div>
-            <div>
-              <label htmlFor="tplLang" className={labelClass}>Idioma *</label>
-              <input id="tplLang" type="text" value={form.language} onChange={(e) => setForm({ ...form, language: e.target.value })} className={inputClass} placeholder="es" />
-            </div>
-          </div>
-          <div>
-            <label htmlFor="tplHeader" className={labelClass}>Encabezado (opcional)</label>
-            <input id="tplHeader" type="text" maxLength={60} value={form.header} onChange={(e) => setForm({ ...form, header: e.target.value })} className={inputClass} />
-          </div>
-          <div>
-            <label htmlFor="tplBody" className={labelClass}>Cuerpo *</label>
-            <textarea
-              id="tplBody"
-              rows={5}
-              maxLength={1024}
-              value={form.body}
-              onChange={(e) => setForm({ ...form, body: e.target.value })}
-              className={inputClass}
-              placeholder="Hola {{1}}, tu factura por {{2}} vence mañana. Gracias."
-              required
-            />
-            <p className="mt-1 text-xs text-gray-500">
-              Usa {'{{1}}'}, {'{{2}}'}... para las variables (consecutivas, ni al inicio ni al final). {form.body.length}/1024
-            </p>
-          </div>
-          {form.examples.length > 0 && (
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              {form.examples.map((ex, i) => (
-                <div key={i}>
-                  <label htmlFor={`tplEx${i}`} className="mb-1 block text-xs font-medium text-gray-600">{`Ejemplo de {{${i + 1}}} *`}</label>
-                  <input
-                    id={`tplEx${i}`}
-                    type="text"
-                    value={ex}
-                    onChange={(e) => setForm({ ...form, examples: form.examples.map((x, j) => (j === i ? e.target.value : x)) })}
-                    className={inputClass}
-                    required
-                  />
-                </div>
-              ))}
-            </div>
-          )}
-          <div>
-            <label htmlFor="tplFooter" className={labelClass}>Pie (opcional)</label>
-            <input id="tplFooter" type="text" maxLength={60} value={form.footer} onChange={(e) => setForm({ ...form, footer: e.target.value })} className={inputClass} placeholder="Responde SALIR para no recibir más mensajes" />
-          </div>
-          <div className="space-y-2">
-            <span className="block text-sm font-medium text-gray-700">Botones (máx. 3)</span>
-            {form.buttons.map((b, i) => (
-              <div key={i} className="flex flex-wrap items-center gap-2">
-                <select
-                  value={b.type}
-                  onChange={(e) => setButton(i, { type: e.target.value })}
-                  className={inputClass + ' w-40'}
-                  aria-label={`Tipo del botón ${i + 1}`}
-                >
-                  <option value="QUICK_REPLY">Respuesta rápida</option>
-                  <option value="URL">Enlace</option>
-                </select>
-                <input
-                  type="text"
-                  maxLength={25}
-                  value={b.text}
-                  onChange={(e) => setButton(i, { text: e.target.value })}
-                  className={inputClass + ' flex-1'}
-                  placeholder="Texto del botón"
-                  aria-label={`Texto del botón ${i + 1}`}
-                />
-                {b.type === 'URL' && (
-                  <input
-                    type="url"
-                    value={b.url ?? ''}
-                    onChange={(e) => setButton(i, { url: e.target.value })}
-                    className={inputClass + ' flex-1'}
-                    placeholder="https://..."
-                    aria-label={`URL del botón ${i + 1}`}
-                  />
-                )}
-                <button
-                  type="button"
-                  onClick={() => setForm((f) => ({ ...f, buttons: f.buttons.filter((_, j) => j !== i) }))}
-                  className="rounded p-2 text-gray-400 hover:bg-red-50 hover:text-red-600"
-                  aria-label={`Quitar botón ${i + 1}`}
-                >
-                  <Trash2 className="h-4 w-4" aria-hidden="true" />
-                </button>
-              </div>
-            ))}
-            {form.buttons.length < 3 && (
-              <button
-                type="button"
-                onClick={() => setForm((f) => ({ ...f, buttons: [...f.buttons, { type: 'QUICK_REPLY', text: '' }] }))}
-                className="inline-flex items-center text-xs font-medium text-green-700 hover:underline"
-              >
-                <Plus className="mr-1 h-3.5 w-3.5" aria-hidden="true" /> Añadir botón
-              </button>
-            )}
-          </div>
-          <div className="flex justify-end gap-3 border-t border-gray-200 pt-4">
-            <button type="button" onClick={() => setShowForm(false)} className="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">
-              Cancelar
-            </button>
-            <button type="submit" disabled={saving} className="inline-flex items-center rounded-md bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50">
-              {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />}
-              Enviar a aprobación
-            </button>
-          </div>
-        </form>
-      )}
-
-      {templates.length === 0 ? (
-        <p className="text-sm text-gray-500">
-          No hay plantillas. {isAdmin ? 'Sincroniza las que ya existan en Meta o crea una nueva.' : 'Pide a un administrador que las cree o sincronice.'}
-        </p>
-      ) : (
-        <ul className="divide-y divide-gray-200 rounded-md border border-gray-200">
-          {templates.map((t) => (
-            <li key={t.id} className="flex flex-wrap items-start justify-between gap-3 p-4">
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-mono text-sm font-medium text-gray-900">{t.element_name}</span>
-                  <StatusBadge status={t.status} />
-                  <span className="text-xs text-gray-500">
-                    {CATEGORY_LABELS[t.category] ?? t.category} · {t.language} · {t.template_type}
-                  </span>
-                </div>
-                {t.header && <p className="mt-1 text-sm font-semibold text-gray-700">{t.header}</p>}
-                <p className="mt-1 whitespace-pre-wrap text-sm text-gray-600">{t.body}</p>
-                {t.footer && <p className="mt-1 text-xs text-gray-400">{t.footer}</p>}
-                {t.reason && t.status !== 'APPROVED' && <p className="mt-1 text-xs text-red-600">Motivo: {t.reason}</p>}
-              </div>
-              {isAdmin && (
-                <button
-                  type="button"
-                  onClick={() => remove(t)}
-                  className="rounded p-2 text-gray-400 hover:bg-red-50 hover:text-red-600"
-                  aria-label={`Quitar plantilla ${t.element_name}`}
-                >
-                  <Trash2 className="h-4 w-4" aria-hidden="true" />
-                </button>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
   );
 };
 

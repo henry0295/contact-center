@@ -314,120 +314,45 @@ class WhatsAppController
     }
 
     /**
-     * Crea una plantilla de texto y la envía a aprobación de Meta (admin).
-     * body: {name, category, language, header?, body, footer?, examples[], buttons?[]}
+     * Crea una plantilla y la envía a aprobación de Meta (admin).
+     * body: {name, category, language, header?, body, footer?, examples[], buttons?[],
+     *        auth?: {securityRecommendation, expirationMinutes, buttonText}}
+     * Para AUTHENTICATION el texto lo fija Meta: solo se eligen las opciones.
      */
     public function createTemplate(Request $request, Response $response): Response
     {
         $d = (array) ($request->getParsedBody() ?? []);
         $name = strtolower(trim((string) ($d['name'] ?? '')));
-        $category = strtoupper(trim((string) ($d['category'] ?? '')));
         $language = trim((string) ($d['language'] ?? 'es'));
-        $header = trim((string) ($d['header'] ?? ''));
-        $body = trim((string) ($d['body'] ?? ''));
-        $footer = trim((string) ($d['footer'] ?? ''));
-        $examples = array_values(array_map(static fn ($v) => trim((string) $v), (array) ($d['examples'] ?? [])));
 
-        $error = null;
         if (!preg_match('/^[a-z0-9_]{3,180}$/', $name)) {
-            $error = 'El nombre solo admite minúsculas, números y guion bajo (p.ej. promo_octubre).';
-        } elseif (!in_array($category, self::CATEGORIES, true)) {
-            $error = 'Categoría inválida (MARKETING, UTILITY o AUTHENTICATION).';
-        } elseif (!preg_match('/^[a-z]{2}(_[A-Z]{2})?$/', $language)) {
-            $error = 'Idioma inválido (p.ej. es, es_CO, en_US).';
-        } elseif ($body === '' || mb_strlen($body) > 1024) {
-            $error = 'El cuerpo es obligatorio y admite hasta 1024 caracteres.';
-        } elseif (mb_strlen($header) > 60 || mb_strlen($footer) > 60) {
-            $error = 'Encabezado y pie admiten hasta 60 caracteres.';
-        } elseif (preg_match('/\{\{/', $header . $footer)) {
-            $error = 'Las variables solo se permiten en el cuerpo.';
+            return $this->jsonResponse($response, ['error' => 'El nombre solo admite minúsculas, números y guion bajo (p.ej. promo_octubre).'], 400);
         }
-
-        $vars = WhatsAppRepository::countVars($body);
-        if ($error === null) {
-            preg_match_all('/\{\{\s*(\d+)\s*\}\}/', $body, $m);
-            $nums = array_unique(array_map('intval', $m[1]));
-            sort($nums);
-            if ($vars > 0 && $nums !== range(1, $vars)) {
-                $error = 'Las variables deben ser consecutivas: {{1}}, {{2}}, ...';
-            } elseif (preg_match('/^\s*\{\{|\{\{\s*\d+\s*\}\}\s*$/', $body)) {
-                $error = 'Meta no permite que el cuerpo empiece o termine con una variable.';
-            } elseif (count($examples) < $vars || in_array('', array_slice($examples, 0, $vars), true)) {
-                $error = 'Escribe un ejemplo para cada variable (Meta lo usa para revisar la plantilla).';
-            }
+        if (!preg_match('/^[a-z]{2}(_[A-Z]{2})?$/', $language)) {
+            return $this->jsonResponse($response, ['error' => 'Idioma inválido (p.ej. es, es_CO, en_US).'], 400);
         }
-
-        $buttons = [];
-        if ($error === null) {
-            foreach ((array) ($d['buttons'] ?? []) as $b) {
-                $type = strtoupper((string) ($b['type'] ?? ''));
-                $text = trim((string) ($b['text'] ?? ''));
-                if ($text === '' || mb_strlen($text) > 25) {
-                    $error = 'Cada botón necesita un texto de hasta 25 caracteres.';
-                    break;
-                }
-                if ($type === 'QUICK_REPLY') {
-                    $buttons[] = ['type' => 'QUICK_REPLY', 'text' => $text];
-                } elseif ($type === 'URL') {
-                    $url = trim((string) ($b['url'] ?? ''));
-                    if (!preg_match('#^https://[^\s{}]+$#', $url)) {
-                        $error = 'El botón de enlace necesita una URL https fija.';
-                        break;
-                    }
-                    $buttons[] = ['type' => 'URL', 'text' => $text, 'url' => $url, 'buttonValue' => $url, 'suffix' => ''];
-                } else {
-                    $error = 'Tipo de botón inválido (QUICK_REPLY o URL).';
-                    break;
-                }
-            }
-            if ($error === null && count($buttons) > 3) {
-                $error = 'Máximo 3 botones.';
-            }
-        }
+        [$error, $t] = $this->parseTemplateInput($d);
         if ($error !== null) {
             return $this->jsonResponse($response, ['error' => $error], 400);
         }
 
-        // Ejemplo con el formato de Gupshup: las variables se sustituyen por [valor].
-        $example = preg_replace_callback(
-            '/\{\{\s*(\d+)\s*\}\}/',
-            static fn ($mm) => '[' . ($examples[(int) $mm[1] - 1] ?? 'ejemplo') . ']',
-            $body
-        );
-
         try {
-            $remote = $this->wa->applyTemplate([
-                'elementName'  => $name,
-                'languageCode' => $language,
-                'category'     => $category,
-                'content'      => $body,
-                'example'      => (string) $example,
-                'header'       => $header !== '' ? $header : null,
-                'footer'       => $footer !== '' ? $footer : null,
-                'buttons'      => $buttons,
-            ]);
+            $remote = $this->wa->applyTemplate($t['remote'] + ['elementName' => $name, 'languageCode' => $language]);
         } catch (\Throwable $e) {
             return $this->jsonResponse($response, ['error' => $e->getMessage()], 502);
         }
 
-        $id = $this->repo->upsertTemplate([
+        $id = $this->repo->upsertTemplate($t['local'] + [
             'external_id'   => (string) ($remote['id'] ?? ''),
             'element_name'  => $name,
             'language'      => $language,
-            'category'      => $category,
             'template_type' => 'TEXT',
-            'header'        => $header !== '' ? $header : null,
-            'body'          => $body,
-            'footer'        => $footer !== '' ? $footer : null,
-            'buttons_json'  => $buttons ? json_encode($buttons, JSON_UNESCAPED_UNICODE) : null,
-            'example'       => (string) $example,
-            'var_count'     => $vars,
             'status'        => strtoupper((string) ($remote['status'] ?? 'PENDING')),
         ]);
 
         Logger::audit()->info('Plantilla de WhatsApp enviada a aprobación', array_merge(
             Logger::requestContext(),
-            ['plantilla' => $name, 'categoria' => $category, 'por' => $request->getAttribute('user')['email'] ?? null]
+            ['plantilla' => $name, 'categoria' => $t['local']['category'], 'por' => $request->getAttribute('user')['email'] ?? null]
         ));
 
         return $this->jsonResponse($response, [
@@ -437,12 +362,265 @@ class WhatsAppController
         ], 201);
     }
 
-    /** Quita la plantilla de la lista local (no la borra en Meta). Admin. */
+    /**
+     * Edita una plantilla de texto en Meta y la reenvía a revisión (admin).
+     * Sirve para corregir una rechazada o actualizar una aprobada (Meta: hasta
+     * 10 ediciones en 30 días, una cada 24 h, sin cambiar la categoría).
+     */
+    public function editTemplate(Request $request, Response $response, array $args): Response
+    {
+        $tpl = $this->repo->findTemplate((int) ($args['id'] ?? 0));
+        if ($tpl === null) {
+            return $this->jsonResponse($response, ['error' => 'La plantilla no existe'], 404);
+        }
+        if (($tpl['external_id'] ?? '') === '') {
+            return $this->jsonResponse($response, ['error' => 'Esta plantilla no tiene identificador de Meta: sincroniza primero.'], 409);
+        }
+        if (($tpl['template_type'] ?? 'TEXT') !== 'TEXT') {
+            return $this->jsonResponse($response, ['error' => 'Desde aquí solo se editan plantillas de texto.'], 409);
+        }
+        if ($tpl['status'] === 'PENDING') {
+            return $this->jsonResponse($response, ['error' => 'La plantilla está en revisión: espera la respuesta de Meta antes de editarla.'], 409);
+        }
+
+        $d = (array) ($request->getParsedBody() ?? []);
+        // Meta no permite cambiar la categoría de una plantilla aprobada.
+        if ($tpl['status'] === 'APPROVED') {
+            $d['category'] = $tpl['category'];
+        }
+        [$error, $t] = $this->parseTemplateInput($d);
+        if ($error !== null) {
+            return $this->jsonResponse($response, ['error' => $error], 400);
+        }
+
+        $r = $t['remote'];
+        $form = ['content' => $r['content'], 'category' => $r['category'], 'templateType' => 'TEXT', 'example' => $r['example']];
+        foreach (['header', 'footer'] as $k) {
+            if (!empty($r[$k])) {
+                $form[$k] = $r[$k];
+            }
+        }
+        if (!empty($r['header'])) {
+            $form['exampleHeader'] = $r['header'];
+        }
+        if (!empty($r['buttons'])) {
+            $form['buttons'] = json_encode($r['buttons'], JSON_UNESCAPED_UNICODE);
+        }
+        if ($r['category'] === 'AUTHENTICATION') {
+            unset($form['header'], $form['footer'], $form['exampleHeader']);
+            $form['addSecurityRecommendation'] = !empty($r['addSecurityRecommendation']) ? 'true' : 'false';
+            if (!empty($r['codeExpirationMinutes'])) {
+                $form['codeExpirationMinutes'] = (string) (int) $r['codeExpirationMinutes'];
+            }
+        }
+
+        try {
+            $this->wa->editTemplate((string) $tpl['external_id'], $form);
+        } catch (\Throwable $e) {
+            return $this->jsonResponse($response, ['error' => $e->getMessage()], 502);
+        }
+        $this->repo->updateTemplateContent((int) $tpl['id'], $t['local']);
+
+        Logger::audit()->info('Plantilla de WhatsApp editada y reenviada a revisión', array_merge(
+            Logger::requestContext(),
+            ['plantilla' => $tpl['element_name'], 'estado_anterior' => $tpl['status'], 'por' => $request->getAttribute('user')['email'] ?? null]
+        ));
+
+        return $this->jsonResponse($response, [
+            'success'  => true,
+            'message'  => 'Cambios enviados a Meta. La plantilla queda en revisión hasta que la aprueben.',
+            'template' => $this->repo->findTemplate((int) $tpl['id']),
+        ]);
+    }
+
+    /**
+     * Quita la plantilla (admin). Con ?remote=1 también la borra en Meta: es
+     * irreversible, afecta a todos sus idiomas y Meta no deja reutilizar el
+     * nombre durante 30 días. Sin remote solo se quita de la lista local
+     * (reaparece al sincronizar).
+     */
     public function deleteTemplate(Request $request, Response $response, array $args): Response
     {
-        $ok = $this->repo->deleteTemplate((int) ($args['id'] ?? 0));
+        $tpl = $this->repo->findTemplate((int) ($args['id'] ?? 0));
+        if ($tpl === null) {
+            return $this->jsonResponse($response, ['error' => 'La plantilla no existe'], 404);
+        }
+        $remote = filter_var($request->getQueryParams()['remote'] ?? false, FILTER_VALIDATE_BOOLEAN);
 
-        return $this->jsonResponse($response, $ok ? ['success' => true] : ['error' => 'La plantilla no existe'], $ok ? 200 : 404);
+        $pending = $this->repo->pendingCampaignsUsing((string) $tpl['element_name']);
+        if (!empty($pending)) {
+            return $this->jsonResponse($response, [
+                'error'     => 'Hay campañas sin terminar que usan esta plantilla ("' . $pending[0]['name'] . '"). Cancélalas o espera a que terminen.',
+                'campaigns' => $pending,
+            ], 409);
+        }
+
+        if (!$remote) {
+            $this->repo->deleteTemplate((int) $tpl['id']);
+
+            return $this->jsonResponse($response, ['success' => true, 'message' => 'Plantilla quitada de la lista (sigue existiendo en Meta).']);
+        }
+
+        try {
+            $this->wa->deleteRemoteTemplate((string) $tpl['element_name']);
+        } catch (\Throwable $e) {
+            $msg = $e->getMessage();
+            if (stripos($msg, 'does not exist') !== false || stripos($msg, 'Does not exists') !== false) {
+                // Ya no estaba en Meta: se limpia la copia local.
+                $n = $this->repo->deleteTemplatesByName((string) $tpl['element_name']);
+
+                return $this->jsonResponse($response, ['success' => true, 'deleted' => $n, 'message' => 'La plantilla ya no existía en Meta; se quitó de la lista.']);
+            }
+            if (stripos($msg, 'sandbox') !== false || stripos($msg, 'not live') !== false) {
+                $msg = 'Meta solo permite borrar plantillas cuando el número está registrado (línea en vivo).';
+            }
+
+            return $this->jsonResponse($response, ['error' => $msg], 502);
+        }
+        $n = $this->repo->deleteTemplatesByName((string) $tpl['element_name']);
+
+        Logger::audit()->info('Plantilla de WhatsApp borrada en Meta', array_merge(
+            Logger::requestContext(),
+            ['plantilla' => $tpl['element_name'], 'versiones' => $n, 'estado' => $tpl['status'], 'por' => $request->getAttribute('user')['email'] ?? null]
+        ));
+
+        return $this->jsonResponse($response, [
+            'success' => true,
+            'deleted' => $n,
+            'message' => 'Plantilla borrada en Meta. El nombre "' . $tpl['element_name'] . '" no se podrá reutilizar durante 30 días.',
+        ]);
+    }
+
+    /** Texto fijo de Meta para autenticación (Meta lo traduce al idioma de la plantilla). */
+    private const AUTH_CONTENT = '{{1}} is your verification code.';
+
+    /**
+     * Valida los campos de una plantilla y arma lo que se envía a Gupshup y lo
+     * que se guarda localmente.
+     *
+     * @return array{0:?string,1:array{remote:array,local:array}}
+     */
+    private function parseTemplateInput(array $d): array
+    {
+        $category = strtoupper(trim((string) ($d['category'] ?? '')));
+        if (!in_array($category, self::CATEGORIES, true)) {
+            return ['Categoría inválida (MARKETING, UTILITY o AUTHENTICATION).', []];
+        }
+
+        if ($category === 'AUTHENTICATION') {
+            $a = (array) ($d['auth'] ?? []);
+            $security = filter_var($a['securityRecommendation'] ?? true, FILTER_VALIDATE_BOOLEAN);
+            $minutes = isset($a['expirationMinutes']) && $a['expirationMinutes'] !== '' && $a['expirationMinutes'] !== null ? (int) $a['expirationMinutes'] : null;
+            $btn = trim((string) ($a['buttonText'] ?? 'Copiar código'));
+            if ($minutes !== null && ($minutes < 1 || $minutes > 90)) {
+                return ['El vencimiento del código debe estar entre 1 y 90 minutos.', []];
+            }
+            if ($btn === '' || mb_strlen($btn) > 25) {
+                return ['El texto del botón admite hasta 25 caracteres.', []];
+            }
+            $buttons = [['type' => 'OTP', 'otp_type' => 'COPY_CODE', 'text' => $btn]];
+            $body = '{{1}} es tu código de verificación.' . ($security ? ' Por tu seguridad, no lo compartas.' : '');
+
+            return [null, [
+                'remote' => [
+                    'category' => 'AUTHENTICATION', 'content' => self::AUTH_CONTENT,
+                    'example' => '[123456] is your verification code.', 'buttons' => $buttons,
+                    'addSecurityRecommendation' => $security, 'codeExpirationMinutes' => $minutes,
+                ],
+                'local' => [
+                    'category' => 'AUTHENTICATION', 'header' => null, 'body' => $body,
+                    'footer' => $minutes !== null ? "Este código vence en {$minutes} minutos." : null,
+                    'buttons_json' => json_encode($buttons, JSON_UNESCAPED_UNICODE),
+                    'example' => '123456 es tu código de verificación.', 'var_count' => 1,
+                ],
+            ]];
+        }
+
+        $header = trim((string) ($d['header'] ?? ''));
+        $body = trim((string) ($d['body'] ?? ''));
+        $footer = trim((string) ($d['footer'] ?? ''));
+        $examples = array_values(array_map(static fn ($v) => trim((string) $v), (array) ($d['examples'] ?? [])));
+
+        if ($body === '' || mb_strlen($body) > 1024) {
+            return ['El cuerpo es obligatorio y admite hasta 1024 caracteres.', []];
+        }
+        if (mb_strlen($header) > 60 || mb_strlen($footer) > 60) {
+            return ['Encabezado y pie admiten hasta 60 caracteres.', []];
+        }
+        if (preg_match('/\{\{/', $header . $footer)) {
+            return ['Las variables solo se permiten en el cuerpo.', []];
+        }
+
+        $vars = WhatsAppRepository::countVars($body);
+        preg_match_all('/\{\{\s*(\d+)\s*\}\}/', $body, $m);
+        $nums = array_unique(array_map('intval', $m[1]));
+        sort($nums);
+        if ($vars > 0 && $nums !== range(1, $vars)) {
+            return ['Las variables deben ser consecutivas: {{1}}, {{2}}, ...', []];
+        }
+        if (preg_match('/^\s*\{\{|\{\{\s*\d+\s*\}\}[\s.!?¡¿,;:]*$/u', $body)) {
+            return ['Meta no permite que el cuerpo empiece o termine con una variable: añade texto antes y después.', []];
+        }
+        if (preg_match('/\}\}\s*\{\{/', $body)) {
+            return ['Meta no permite dos variables seguidas sin texto entre ellas.', []];
+        }
+        if (count($examples) < $vars || in_array('', array_slice($examples, 0, $vars), true)) {
+            return ['Escribe un ejemplo para cada variable (Meta lo usa para revisar la plantilla).', []];
+        }
+
+        $buttons = [];
+        foreach ((array) ($d['buttons'] ?? []) as $b) {
+            $type = strtoupper((string) ($b['type'] ?? ''));
+            $text = trim((string) ($b['text'] ?? ''));
+            if ($text === '' || mb_strlen($text) > 25) {
+                return ['Cada botón necesita un texto de hasta 25 caracteres.', []];
+            }
+            if ($type === 'QUICK_REPLY') {
+                $buttons[] = ['type' => 'QUICK_REPLY', 'text' => $text];
+            } elseif ($type === 'URL') {
+                $url = trim((string) ($b['url'] ?? ''));
+                if (!preg_match('#^https://[^\s{}]+\.[^\s{}]+$#', $url)) {
+                    return ['El botón de enlace necesita una URL https fija.', []];
+                }
+                $buttons[] = ['type' => 'URL', 'text' => $text, 'url' => $url, 'buttonValue' => $url, 'suffix' => ''];
+            } elseif ($type === 'PHONE_NUMBER') {
+                $phone = preg_replace('/[^\d+]/', '', (string) ($b['phone_number'] ?? '')) ?? '';
+                if (!preg_match('/^\+\d{8,15}$/', $phone)) {
+                    return ['El botón de llamada necesita el número con indicativo, p.ej. +573001234567.', []];
+                }
+                $buttons[] = ['type' => 'PHONE_NUMBER', 'text' => $text, 'phone_number' => $phone];
+            } else {
+                return ['Tipo de botón inválido (respuesta rápida, enlace o llamada).', []];
+            }
+        }
+        if (count($buttons) > 3) {
+            return ['Máximo 3 botones.', []];
+        }
+        $types = array_count_values(array_column($buttons, 'type'));
+        if (($types['URL'] ?? 0) > 2 || ($types['PHONE_NUMBER'] ?? 0) > 1) {
+            return ['Máximo 2 botones de enlace y 1 de llamada.', []];
+        }
+
+        // Ejemplo con el formato de Gupshup: las variables se sustituyen por [valor].
+        $example = (string) preg_replace_callback(
+            '/\{\{\s*(\d+)\s*\}\}/',
+            static fn ($mm) => '[' . ($examples[(int) $mm[1] - 1] ?? 'ejemplo') . ']',
+            $body
+        );
+
+        return [null, [
+            'remote' => [
+                'category' => $category, 'content' => $body, 'example' => $example,
+                'header' => $header !== '' ? $header : null, 'footer' => $footer !== '' ? $footer : null,
+                'buttons' => $buttons,
+            ],
+            'local' => [
+                'category' => $category, 'header' => $header !== '' ? $header : null, 'body' => $body,
+                'footer' => $footer !== '' ? $footer : null,
+                'buttons_json' => $buttons ? json_encode($buttons, JSON_UNESCAPED_UNICODE) : null,
+                'example' => $example, 'var_count' => $vars,
+            ],
+        ]];
     }
 
     // ---------------------------------------------------------------- envíos --
