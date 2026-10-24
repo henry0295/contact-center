@@ -4,12 +4,10 @@
  * Activación y administración de la línea de WhatsApp (Gupshup Partner API)
  * de ESTA instalación. Lo ejecuta el administrador de Vozip (o deploy.sh).
  *
- * Las credenciales de PARTNER (administran a todos los clientes) se leen de
- * variables de entorno y NUNCA se guardan en este servidor. En el .env solo
- * queda el token de la app de este cliente (GUPSHUP_APP_ID / GUPSHUP_APP_TOKEN).
- *
- *   export GUPSHUP_PARTNER_EMAIL='partner@vozip.com.co'
- *   read -rs GUPSHUP_PARTNER_SECRET; export GUPSHUP_PARTNER_SECRET
+ * Las credenciales de PARTNER (administran a todos los clientes) se piden por
+ * la terminal (el secret no se muestra) y NUNCA se guardan en este servidor.
+ * También se aceptan por entorno: GUPSHUP_PARTNER_EMAIL / GUPSHUP_PARTNER_SECRET.
+ * En el .env solo queda el token de la app de este cliente (GUPSHUP_APP_ID / GUPSHUP_APP_TOKEN).
  *
  *   php bin/whatsapp.php activate --name=ClienteXYZ   crea (o reutiliza) la app, genera el
  *                                                     enlace de registro, guarda el token y
@@ -35,6 +33,35 @@ use App\Support\EnvFile;
 use GuzzleHttp\Client;
 
 function out(string $m): void { fwrite(STDOUT, $m . "\n"); }
+
+/**
+ * Pide un dato por la terminal (no queda en el historial ni en argv).
+ * $hidden oculta lo que se escribe (para el secret).
+ */
+function ask(string $label, bool $hidden = false): string
+{
+    $tty = @fopen('/dev/tty', 'r+');
+    $in = $tty ?: STDIN;
+    $outStream = $tty ?: STDERR;
+    $interactive = $tty !== false || (function_exists('stream_isatty') && stream_isatty(STDIN));
+    if (!$interactive) {
+        return '';
+    }
+    fwrite($outStream, $label);
+    if ($hidden && DIRECTORY_SEPARATOR === '/') {
+        @shell_exec('stty -echo < /dev/tty 2>/dev/null');
+    }
+    $value = trim((string) fgets($in));
+    if ($hidden && DIRECTORY_SEPARATOR === '/') {
+        @shell_exec('stty echo < /dev/tty 2>/dev/null');
+        fwrite($outStream, "\n");
+    }
+    if ($tty) {
+        fclose($tty);
+    }
+
+    return $value;
+}
 function fail(string $m, int $code = 1): never { fwrite(STDERR, 'ERROR: ' . $m . "\n"); exit($code); }
 
 // getopt() se detiene en el primer argumento posicional (el comando): se parsea a mano.
@@ -88,17 +115,24 @@ function apiError(array $data, string $raw, int $code): string
     return 'HTTP ' . $code . ': ' . ($msg !== '' ? $msg : 'sin respuesta');
 }
 
-/** Token de partner (24 h). Las credenciales vienen solo del entorno. */
+/** Token de partner (24 h). Credenciales del entorno o pedidas por la terminal; no se guardan. */
 function partnerToken(Client $http, string $base): string
 {
     static $token = null;
     if ($token !== null) {
         return $token;
     }
+    // Primero el entorno (deploy.sh); si no está, se pide por la terminal.
     $email = trim((string) getenv('GUPSHUP_PARTNER_EMAIL'));
     $secret = trim((string) getenv('GUPSHUP_PARTNER_SECRET'));
+    if ($email === '') {
+        $email = ask('Email de partner de Gupshup: ');
+    }
+    if ($secret === '') {
+        $secret = ask('Client secret de Gupshup (no se muestra): ', true);
+    }
     if ($email === '' || $secret === '') {
-        fail('Faltan GUPSHUP_PARTNER_EMAIL y GUPSHUP_PARTNER_SECRET en el entorno (no se guardan en el servidor).', 2);
+        fail('Faltan el email o el client secret de partner de Gupshup (no se guardan en el servidor).', 2);
     }
     [$code, $data, $raw] = call($http, 'POST', $base . '/partner/account/login', [
         // La documentación de Gupshup usa "secret" en el ejemplo y "password" en
@@ -421,6 +455,7 @@ switch ($command) {
     default:
         out('Uso: php bin/whatsapp.php activate --name=<cliente> | link [--regenerate] | token | subscribe');
         out('     | status | probe | sync-templates');
-        out('Las operaciones de partner requieren GUPSHUP_PARTNER_EMAIL y GUPSHUP_PARTNER_SECRET en el entorno.');
+        out('Las operaciones de partner piden el email y el client secret de Gupshup por la terminal');
+        out('(o los toman de GUPSHUP_PARTNER_EMAIL / GUPSHUP_PARTNER_SECRET). No se guardan en el servidor.');
         exit($command === 'help' ? 0 : 2);
 }

@@ -7,11 +7,10 @@
  *   El dispatcher lee la cola cada minuto (solo conexiones salientes).
  *
  * Lo ejecuta Vozip UNA vez por cliente, con credenciales de AWS de
- * administrador que se pasan por entorno y NO se guardan:
+ * administrador que se piden por la terminal (o por entorno:
+ * AWS_ADMIN_ACCESS_KEY_ID / AWS_ADMIN_SECRET_ACCESS_KEY) y NO se guardan:
  *
- *   export AWS_ADMIN_ACCESS_KEY_ID='AKIA...'
- *   read -rs AWS_ADMIN_SECRET_ACCESS_KEY; export AWS_ADMIN_SECRET_ACCESS_KEY
- *   php bin/ses-events.php setup --name=clientexyz
+ *   sudo -u contactcenter php bin/ses-events.php setup --name=clientexyz
  *   php bin/ses-events.php status          (no necesita credenciales de administrador)
  *
  * setup crea (o reutiliza): el configuration set cc-<nombre>, la cola
@@ -40,6 +39,35 @@ use Aws\Sts\StsClient;
 
 function out(string $m): void { fwrite(STDOUT, $m . "\n"); }
 function fail(string $m, int $code = 1): never { fwrite(STDERR, 'ERROR: ' . $m . "\n"); exit($code); }
+
+/**
+ * Pide un dato por la terminal (no queda en el historial ni en argv).
+ * $hidden oculta lo que se escribe (para el secret).
+ */
+function ask(string $label, bool $hidden = false): string
+{
+    $tty = @fopen('/dev/tty', 'r+');
+    $in = $tty ?: STDIN;
+    $outStream = $tty ?: STDERR;
+    $interactive = $tty !== false || (function_exists('stream_isatty') && stream_isatty(STDIN));
+    if (!$interactive) {
+        return '';
+    }
+    fwrite($outStream, $label);
+    if ($hidden && DIRECTORY_SEPARATOR === '/') {
+        @shell_exec('stty -echo < /dev/tty 2>/dev/null');
+    }
+    $value = trim((string) fgets($in));
+    if ($hidden && DIRECTORY_SEPARATOR === '/') {
+        @shell_exec('stty echo < /dev/tty 2>/dev/null');
+        fwrite($outStream, "\n");
+    }
+    if ($tty) {
+        fclose($tty);
+    }
+
+    return $value;
+}
 
 $command = 'help';
 $opts = [];
@@ -78,8 +106,15 @@ switch ($command) {
         }
         $adminKey = trim((string) getenv('AWS_ADMIN_ACCESS_KEY_ID'));
         $adminSecret = trim((string) getenv('AWS_ADMIN_SECRET_ACCESS_KEY'));
+        // Si no vienen por entorno, se piden por la terminal.
+        if ($adminKey === '') {
+            $adminKey = ask('Access key ID de administrador de AWS (vozip-ses-setup): ');
+        }
+        if ($adminSecret === '') {
+            $adminSecret = ask('Secret access key de administrador de AWS (no se muestra): ', true);
+        }
         if ($adminKey === '' || $adminSecret === '') {
-            fail('Faltan AWS_ADMIN_ACCESS_KEY_ID y AWS_ADMIN_SECRET_ACCESS_KEY en el entorno (no se guardan en el servidor).', 2);
+            fail('Faltan las credenciales de administrador de AWS (no se guardan en el servidor).', 2);
         }
         if (empty($clientCreds['key']) || empty($clientCreds['secret'])) {
             fail('El .env no tiene AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY de esta instalación.', 2);
@@ -242,6 +277,7 @@ switch ($command) {
 
     default:
         out('Uso: php bin/ses-events.php setup --name=<cliente> | status');
-        out('setup requiere AWS_ADMIN_ACCESS_KEY_ID y AWS_ADMIN_SECRET_ACCESS_KEY en el entorno (no se guardan).');
+        out('setup pide las credenciales de administrador de AWS por la terminal');
+        out('(o las toma de AWS_ADMIN_ACCESS_KEY_ID / AWS_ADMIN_SECRET_ACCESS_KEY). No se guardan.');
         exit($command === 'help' ? 0 : 2);
 }

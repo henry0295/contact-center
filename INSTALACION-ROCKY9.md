@@ -778,14 +778,11 @@ Flujo: SES (configuration set del cliente) → EventBridge (regla que solo deja 
 - **Rebote temporal** (buzón lleno, por ejemplo): se anota, pero la dirección no se bloquea.
 - **Rechazado por SES:** el destinatario pasa a fallido.
 
-Se activa una vez por cliente, con credenciales de AWS de administrador de Vozip pasadas por entorno. Esas credenciales no se guardan:
+Se activa una vez por cliente, con credenciales de AWS de administrador de Vozip. El comando las pide por la terminal (el secret no se muestra) y no se guardan:
 
 ```bash
 APP=/var/www/contact-center
-export AWS_ADMIN_ACCESS_KEY_ID='AKIA...'
-read -rs AWS_ADMIN_SECRET_ACCESS_KEY; export AWS_ADMIN_SECRET_ACCESS_KEY
-sudo --preserve-env=AWS_ADMIN_ACCESS_KEY_ID,AWS_ADMIN_SECRET_ACCESS_KEY -u contactcenter php $APP/bin/ses-events.php setup --name=clientexyz
-unset AWS_ADMIN_SECRET_ACCESS_KEY
+sudo -u contactcenter php $APP/bin/ses-events.php setup --name=clientexyz
 sudo systemctl reload php-fpm
 sudo -u nginx php $APP/bin/ses-events.php status
 ```
@@ -881,21 +878,19 @@ sudo -u nginx php $APP/bin/credits.php adjust -5000 --note="Corrección"
 
 ### 14.1.1 WhatsApp (Gupshup)
 
-WhatsApp sale por la **Partner API de Gupshup**. Cada cliente tiene su propia línea (una "app" de Gupshup). En el `.env` solo queda el **token de la app de ese cliente** (`GUPSHUP_APP_ID`, `GUPSHUP_APP_TOKEN`). Las **credenciales de partner de Vozip** se pasan por variables de entorno al activar y **nunca se guardan en el servidor**.
+WhatsApp sale por la **Partner API de Gupshup**. Cada cliente tiene su propia línea (una "app" de Gupshup). En el `.env` solo queda el **token de la app de ese cliente** (`GUPSHUP_APP_ID`, `GUPSHUP_APP_TOKEN`). Las **credenciales de partner de Vozip** las pide el comando por la terminal (el secret no se muestra) y **nunca se guardan en el servidor**.
 
 ```bash
 APP=/var/www/contact-center
-export GUPSHUP_PARTNER_EMAIL='<email partner>'
-read -rs GUPSHUP_PARTNER_SECRET; export GUPSHUP_PARTNER_SECRET
 # Crea la app (o reutiliza GUPSHUP_APP_ID), genera el enlace de registro, guarda el
-# token, crea WHATSAPP_WEBHOOK_SECRET y registra el webhook si APP_URL es https:
-sudo --preserve-env=GUPSHUP_PARTNER_EMAIL,GUPSHUP_PARTNER_SECRET -u contactcenter php $APP/bin/whatsapp.php activate --name=ClienteXYZ
-unset GUPSHUP_PARTNER_SECRET
+# token, crea WHATSAPP_WEBHOOK_SECRET y registra el webhook si APP_URL es https.
+# Pide el email de partner y el client secret de Gupshup:
+sudo -u contactcenter php $APP/bin/whatsapp.php activate --name=ClienteXYZ
 sudo systemctl reload php-fpm
 ```
 
 - El cliente abre el **enlace de registro** (válido 5 días; también aparece en WhatsApp → Línea para administradores), entra con su Facebook, elige el portafolio y verifica el número.
-- Otros comandos (los de partner necesitan las mismas variables): `link [--regenerate]`, `token`, `subscribe` (webhook) y `status` (solo token de la app: `sudo -u nginx php $APP/bin/whatsapp.php status`).
+- Otros comandos (los de partner también piden las credenciales): `link [--regenerate]`, `token`, `subscribe` (webhook) y `status` (solo token de la app: `sudo -u nginx php $APP/bin/whatsapp.php status`).
 - Con `deploy.sh`: si se exportan `GUPSHUP_PARTNER_EMAIL`/`GUPSHUP_PARTNER_SECRET`, activa la línea solo (`--wa-name <nombre>`, por defecto el hostname; `--no-whatsapp` lo omite).
 - **Webhook** (estados de entrega, respuestas, aprobación de plantillas): `<APP_URL>/api/webhooks/whatsapp`, autenticado con la cabecera `X-Gupshup-Webhook-Secret`. Requiere **dominio público con https**; por IP privada los envíos salen pero no llegan estados ni respuestas. Tras configurar el dominio: `whatsapp.php subscribe`.
 - **Plantillas**: solo se envían las aprobadas por Meta. El administrador las crea (texto, hasta 3 botones) o las sincroniza en WhatsApp → Plantillas.

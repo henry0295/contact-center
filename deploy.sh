@@ -821,7 +821,8 @@ configure_sms() {
 configure_whatsapp() {
   if [[ "$SKIP_WA" == 1 ]]; then WA_STATUS="omitido (--no-whatsapp)"; return 0; fi
   # activate/link/token/subscribe escriben el .env: como el usuario de la app.
-  local cli="sudo --preserve-env=GUPSHUP_PARTNER_EMAIL,GUPSHUP_PARTNER_SECRET -u ${APP_USER} ${PHP_BIN} ${APP_DIR}/bin/whatsapp.php"
+  # Sin variables de entorno, el CLI pide el email y el secret por la terminal.
+  local cli="sudo -u ${APP_USER} ${PHP_BIN} ${APP_DIR}/bin/whatsapp.php"
   local app_id token
   app_id="$(grep -E '^GUPSHUP_APP_ID=' "$APP_DIR/.env" | cut -d= -f2- || true)"
   token="$(grep -E '^GUPSHUP_APP_TOKEN=' "$APP_DIR/.env" | cut -d= -f2- || true)"
@@ -830,7 +831,7 @@ configure_whatsapp() {
     if [[ -n "$app_id" && -n "$token" ]]; then
       WA_STATUS="activada (app ${app_id}); estado: sudo -u ${WEB_USER} ${PHP_BIN} ${APP_DIR}/bin/whatsapp.php status"
     else
-      WA_STATUS="sin activar: export GUPSHUP_PARTNER_EMAIL/GUPSHUP_PARTNER_SECRET y ${cli} activate --name=<cliente>"
+      WA_STATUS="sin activar: ${cli} activate --name=<cliente> (pide las credenciales de partner)"
     fi
     return 0
   fi
