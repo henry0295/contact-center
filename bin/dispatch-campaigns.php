@@ -134,6 +134,19 @@ try {
         out("Llamadas de voz: {$voiceResult['resolved']} resueltas, {$voiceResult['stillDialing']} aún marcando.");
     }
 
+    // --- 2.6) Estados de los emails (entregas, rebotes, rechazos de SES) ---
+    if (\App\Service\SesEventService::isConfigured()) {
+        try {
+            $ev = (new \App\Service\SesEventService())->poll();
+            if ($ev['received'] > 0) {
+                out("Eventos de email: {$ev['processed']} procesados, {$ev['ignored']} ignorados, {$ev['errors']} con error.");
+            }
+        } catch (\Throwable $e) {
+            Logger::app()->error('No se pudo leer la cola de eventos de SES', ['error' => $e->getMessage()]);
+            out('Eventos de email: ERROR ' . $e->getMessage());
+        }
+    }
+
     // --- 3) Mantenimiento ---
     $prunedSessions = (new SessionRepository())->prune();
     (new LoginAttemptRepository())->prune(7);

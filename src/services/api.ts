@@ -929,8 +929,23 @@ export interface WaStatus {
   quality: string | null;
   /** Límite de conversaciones iniciadas por día (TIER_1K...). */
   messagingLimit: string | null;
+  /** Nombre visible aprobado por Meta. */
+  displayName?: string | null;
+  /** Número de la línea en formato internacional, sin "+". */
+  phone?: string | null;
+  /** AVAILABLE, LIMITED o BLOCKED según Meta. */
+  canSendMessage?: string | null;
+  /** ACTIVE o BANNED según Meta. */
+  accountStatus?: string | null;
+  /** Solo administradores. */
+  wabaId?: string | null;
+  /** Avisos y errores de Meta, en inglés. Solo administradores. */
+  lineNotes?: string[];
   checkedAt: string | null;
-  /** Solo para administradores: enlace de registro de la línea. */
+  /**
+   * Solo para administradores y solo mientras falte el registro: al activarse
+   * la línea el backend deja de enviarlo.
+   */
   onboardingLink: string | null;
   webhookConfigured: boolean;
 }
@@ -1152,6 +1167,13 @@ export interface ReportSummary {
   byChannel: ChannelTotals[];
   dailySeries: DailyPoint[];
   whatsappFunnel: WaFunnel;
+  /** Estados de entrega de email (eventos de SES). */
+  emailDelivery: {
+    sent: number; delivered: number; bounced: number; softBounced: number; rejected: number; pending: number;
+    deliveredRate: number; bounceRate: number;
+    /** false si la instalación no tiene configurados los eventos de SES. */
+    tracking: boolean;
+  };
   callOutcomes: CallOutcomes;
   replies: { replies: number; optOuts: number };
   failureReasons: FailureReason[];

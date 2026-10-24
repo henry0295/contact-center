@@ -769,9 +769,36 @@ Crea claves permanentes (`AKIA...`) y ponlas en `AWS_ACCESS_KEY_ID` / `AWS_SECRE
 2. Crea el remitente (y el de respuesta/Reply-To si lo usas) sobre el dominio verificado y márcalo como predeterminado; tiene prioridad sobre `MAIL_FROM`.
 3. **Salir del sandbox:** consola SES (región de `AWS_REGION`) → *Account dashboard* → *Request production access*.
 
-### 13.3 Rebotes y quejas
+### 13.3 Estados de entrega: entregas, rebotes y rechazos
 
-La aplicación ya no usa Amazon SNS: los rebotes y quejas de SES no llegan solos a la lista de supresión. Vigila la tasa de rebotes (menos del 5 %) y de quejas (menos del 0,1 %) en la consola de SES (*Reputation metrics*); si suben, AWS puede pausar el envío de la cuenta.
+Flujo: SES (configuration set del cliente) → EventBridge (regla que solo deja pasar ese configuration set) → cola SQS del cliente → el dispatcher la lee cada minuto. Solo conexiones salientes: no hace falta dominio público.
+
+- **Entregado:** el destinatario queda como entregado.
+- **Rebote permanente:** el destinatario pasa a fallido y la dirección entra en **Supresiones**, así que no se le vuelve a enviar. **No se reembolsa**, porque SES sí envió el correo.
+- **Rebote temporal** (buzón lleno, por ejemplo): se anota, pero la dirección no se bloquea.
+- **Rechazado por SES:** el destinatario pasa a fallido.
+
+Se activa una vez por cliente, con credenciales de AWS de administrador de Vozip pasadas por entorno. Esas credenciales no se guardan:
+
+```bash
+APP=/var/www/contact-center
+export AWS_ADMIN_ACCESS_KEY_ID='AKIA...'
+read -rs AWS_ADMIN_SECRET_ACCESS_KEY; export AWS_ADMIN_SECRET_ACCESS_KEY
+sudo --preserve-env=AWS_ADMIN_ACCESS_KEY_ID,AWS_ADMIN_SECRET_ACCESS_KEY -u contactcenter php $APP/bin/ses-events.php setup --name=clientexyz
+unset AWS_ADMIN_SECRET_ACCESS_KEY
+sudo systemctl reload php-fpm
+sudo -u nginx php $APP/bin/ses-events.php status
+```
+
+El comando `setup` crea o reutiliza estos recursos:
+- el configuration set `cc-<nombre>`;
+- la cola cifrada `cc-ses-events-<nombre>`, que guarda los eventos 14 días si el servidor está apagado;
+- la regla `cc-ses-events-<nombre>`;
+- el permiso `cc-ses-events` en el usuario IAM de la instalación, que solo deja leer su propia cola.
+
+Permisos que necesitan las credenciales de administrador: `sts:GetCallerIdentity`, `ses:CreateConfigurationSet`, `ses:CreateConfigurationSetEventDestination`, `ses:UpdateConfigurationSetEventDestination`, `sqs:CreateQueue`, `sqs:GetQueueUrl`, `sqs:GetQueueAttributes`, `sqs:SetQueueAttributes`, `events:PutRule`, `events:PutTargets` e `iam:PutUserPolicy`.
+
+**Costo:** prácticamente cero. Los eventos de SES entran gratis a EventBridge, y SQS incluye un millón de peticiones gratis al mes; con mucho volumen son unos pocos dólares al mes. La tasa de rebotes debe quedar por debajo del 5 % y la de quejas por debajo del 0,1 %. Las dos aparecen en Reportes y en la consola de SES (*Reputation metrics*).
 
 ---
 

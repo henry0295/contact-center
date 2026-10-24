@@ -168,8 +168,13 @@ class CampaignService
 
             try {
                 if ($channel === 'email') {
-                    $this->email->send($target, $personalSubject, $personalBody, null, $attachments, $replyTo);
+                    $messageId = $this->email->send($target, $personalSubject, $personalBody, null, $attachments, $replyTo);
                     $this->recipients->markSent((int) $r['id']);
+                    // Con eventos de SES activos, la entrega o el rebote llegan
+                    // luego por la cola (ver SesEventService) usando este id.
+                    if (is_string($messageId) && $messageId !== '') {
+                        $this->recipients->setExternalId((int) $r['id'], $messageId, EmailService::configurationSet() !== null ? 'accepted' : null);
+                    }
                     $this->messages->log($channel, $target, $personalSubject, 'Sent', null, $id);
                     $sent++;
                 } elseif ($channel === 'call') {

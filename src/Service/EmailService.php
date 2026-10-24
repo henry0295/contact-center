@@ -59,6 +59,14 @@ class EmailService
         }
     }
 
+    /** Configuration set de SES de esta instalación (bin/ses-events.php setup). */
+    public static function configurationSet(): ?string
+    {
+        $v = trim((string) ($_ENV['SES_CONFIGURATION_SET'] ?? ''), " \"'");
+
+        return preg_match('/^[A-Za-z0-9_\-]{1,64}$/', $v) ? $v : null;
+    }
+
     /** Remitente efectivo que se usará en los envíos. */
     public function resolveFrom(?string $from = null): string
     {
@@ -121,7 +129,7 @@ class EmailService
         ?string $from = null,
         array $attachments = [],
         ?string $replyTo = null
-    ): void {
+    ): ?string {
         // La supresión se comprueba PRIMERO: depende solo del destinatario, y
         // así el mensaje de error apunta a la causa real en lugar de quedar
         // tapado por un problema de configuración del remitente.
@@ -147,10 +155,16 @@ class EmailService
         $replyTo = $this->resolveReplyTo($replyTo);
         $raw = $this->buildMime($from, $to, $subject, $body, $attachments, $replyTo);
 
+        $params = ['RawMessage' => ['Data' => $raw]];
+        // Con configuration set, SES publica los eventos (entrega, rebote,
+        // rechazo) de este correo hacia la cola de esta instalación.
+        $configSet = self::configurationSet();
+        if ($configSet !== null) {
+            $params['ConfigurationSetName'] = $configSet;
+        }
+
         try {
-            $result = $this->ses->sendRawEmail([
-                'RawMessage' => ['Data' => $raw],
-            ]);
+            $result = $this->ses->sendRawEmail($params);
 
             Logger::mail()->info('Email enviado', [
                 'to'          => $to,
@@ -160,6 +174,8 @@ class EmailService
                 'attachments' => count($attachments),
                 'messageId'   => $result['MessageId'] ?? null,
             ]);
+
+            return isset($result['MessageId']) ? (string) $result['MessageId'] : null;
         } catch (\Throwable $e) {
             Logger::mail()->error('Fallo al enviar email', [
                 'to'      => $to,

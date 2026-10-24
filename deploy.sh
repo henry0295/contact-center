@@ -682,6 +682,9 @@ configure_env() {
   if [[ -z "$(grep -E '^SMS_INBOUND_SECRET=' "$APP_DIR/.env" | cut -d= -f2-)" ]]; then
     set_env SMS_INBOUND_SECRET "$(openssl rand -hex 24)"
   fi
+  # Estados de email (entregas/rebotes de SES): los rellena bin/ses-events.php setup.
+  ensure_env SES_CONFIGURATION_SET ""
+  ensure_env SES_EVENTS_QUEUE_URL ""
   # WhatsApp (Gupshup): token de la app de este cliente y secreto del webhook.
   ensure_env GUPSHUP_APP_ID ""
   ensure_env GUPSHUP_APP_TOKEN ""

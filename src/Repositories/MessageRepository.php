@@ -35,6 +35,23 @@ class MessageRepository
         $stmt->execute();
     }
 
+    /**
+     * Pasa a Failed el registro "Sent" de un envío que luego falló (rebote o
+     * rechazo informado por el proveedor), para no contarlo dos veces.
+     * Devuelve false si no había registro que actualizar.
+     */
+    public function markSentAsFailed(string $channel, string $recipient, int $campaignId, string $error): bool
+    {
+        $stmt = $this->pdo->prepare(
+            "UPDATE messages SET status = 'Failed', error = :error
+              WHERE channel = :channel AND recipient = :recipient AND campaign_id = :cid AND status = 'Sent'
+              ORDER BY id DESC LIMIT 1"
+        );
+        $stmt->execute([':error' => mb_substr($error, 0, 1000), ':channel' => $channel, ':recipient' => $recipient, ':cid' => $campaignId]);
+
+        return $stmt->rowCount() > 0;
+    }
+
     public function countByChannel(string $channel, string $status = 'Sent'): int
     {
         $stmt = $this->pdo->prepare('SELECT COUNT(*) FROM messages WHERE channel = :channel AND status = :status');

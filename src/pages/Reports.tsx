@@ -33,6 +33,11 @@ const RECIPIENT_STATUS: Record<string, { label: string; cls: string }> = {
 
 const DELIVERY_LABELS: Record<string, string> = {
   accepted: 'Aceptado', sent: 'Enviado', delivered: 'Entregado', read: 'Leído', failed: 'Fallido',
+  bounced: 'Rebotado', soft_bounce: 'Rebote temporal', rejected: 'Rechazado', complaint: 'Queja',
+};
+
+const SUPPRESSION_REASONS: Record<string, string> = {
+  bounce: 'Rebote permanente', complaint: 'Queja de spam', unsubscribe: 'Pidió la baja',
 };
 
 const CHANNEL_LABELS: Record<string, string> = { email: 'Email', sms: 'SMS', call: 'Llamada', whatsapp: 'WhatsApp' };
@@ -557,7 +562,24 @@ const Reports: React.FC = () => {
                 )}
               </Panel>
 
-              <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+              <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 xl:grid-cols-4">
+                <Panel title="Email: entrega y rebotes" icon={Mail}>
+                  {summary && !summary.emailDelivery.tracking && summary.emailDelivery.sent === 0 ? (
+                    <p className="text-sm text-gray-500">Los estados de entrega no están activados en esta instalación. Contacta a tu proveedor.</p>
+                  ) : summary && summary.emailDelivery.sent > 0 ? (
+                    <div className="space-y-2">
+                      <Bar label="Entregados" value={summary.emailDelivery.delivered} total={summary.emailDelivery.sent} color="bg-blue-600" />
+                      <Bar label="Rebotes permanentes" value={summary.emailDelivery.bounced} total={summary.emailDelivery.sent} color="bg-red-500" />
+                      {summary.emailDelivery.rejected > 0 && <Bar label="Rechazados por SES" value={summary.emailDelivery.rejected} total={summary.emailDelivery.sent} color="bg-red-300" />}
+                      {summary.emailDelivery.softBounced > 0 && <Bar label="Rebotes temporales" value={summary.emailDelivery.softBounced} total={summary.emailDelivery.sent} color="bg-amber-400" />}
+                      {summary.emailDelivery.pending > 0 && <p className="text-xs text-gray-500">{num(summary.emailDelivery.pending)} sin confirmar todavía</p>}
+                      {summary.emailDelivery.bounceRate >= 5 && (
+                        <p className="text-xs font-medium text-red-600">La tasa de rebotes supera el 5 %: limpia tus listas para no afectar la reputación de envío.</p>
+                      )}
+                      <p className="text-xs text-gray-400">Las direcciones que rebotan de forma permanente pasan a Supresiones y no se les vuelve a enviar.</p>
+                    </div>
+                  ) : <p className="text-sm text-gray-500">Sin emails con seguimiento en el periodo.</p>}
+                </Panel>
                 <Panel title="WhatsApp: entrega y lectura" icon={MessageCircle}>
                   {funnel && funnel.sent > 0 ? (
                     <>
@@ -889,9 +911,9 @@ const Reports: React.FC = () => {
             <div className="space-y-4">
               <div className="rounded-md border-l-4 border-amber-400 bg-amber-50 p-4">
                 <p className="text-sm text-amber-700">
-                  Estas direcciones pidieron la baja o quedaron bloqueadas para envíos de email.
-                  La aplicación no les envía para proteger la reputación de la cuenta de envío.
-                  Libéralas solo si la persona volvió a autorizar los correos.
+                  Estas direcciones rebotaron de forma permanente (no existen o no aceptan correo),
+                  marcaron un correo como spam o pidieron la baja. La aplicación no les envía para
+                  proteger la reputación de la cuenta de envío. Libéralas solo si el problema se resolvió.
                 </p>
               </div>
 
@@ -906,7 +928,7 @@ const Reports: React.FC = () => {
                       <div className="min-w-0">
                         <p className="truncate text-sm font-medium text-gray-900">{s.email}</p>
                         <p className="truncate text-xs text-gray-500">
-                          {s.reason === 'bounce' || s.reason === 'Bounce' ? 'Rebote permanente' : 'Queja de spam'}
+                          {SUPPRESSION_REASONS[s.reason.toLowerCase()] ?? s.reason}
                           {s.detail ? ` · ${s.detail}` : ''} · {formatDate(s.created_at)}
                         </p>
                       </div>
@@ -935,7 +957,8 @@ const Reports: React.FC = () => {
 const CampaignDetail: React.FC<{ detail: Awaited<ReturnType<typeof api.getCampaign>>; onClose: () => void }> = ({ detail, onClose }) => {
   const c = detail.campaign;
   const s = detail.stats;
-  const isWa = c.channel === 'whatsapp';
+  // WhatsApp y email (con eventos de SES) informan la entrega por destinatario.
+  const isWa = c.channel === 'whatsapp' || (c.channel === 'email' && detail.recipients.some((r) => !!r.delivery_status));
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };

@@ -269,6 +269,9 @@ class DashboardController
             : ($domains > 0 && $sender > 0
                 ? ['status' => 'ok', 'message' => "Dominio verificado ({$domains}) y remitente listo."]
                 : ['status' => 'warning', 'message' => $domains === 0 ? 'No hay un dominio verificado (ver Verificación).' : 'No hay un remitente verificado.']);
+        if ($email['status'] === 'ok' && !\App\Service\SesEventService::isConfigured()) {
+            $email = ['status' => 'warning', 'message' => $email['message'] . ' Sin estados de entrega: los rebotes no se registran (bin/ses-events.php setup).'];
+        }
 
         // SMS (IT Cloud)
         $sms = $env('ITCLOUD_SMS_EMAIL') !== '' && $env('ITCLOUD_SMS_TOKEN') !== ''
@@ -290,7 +293,7 @@ class DashboardController
             $pending = (int) $pdo->query("SELECT COUNT(*) FROM whatsapp_templates WHERE status = 'PENDING'")->fetchColumn();
             $healthy = (bool) ($cache['health']['healthy'] ?? false);
             $notLive = stripos((string) ($cache['health']['message'] ?? ''), 'not live') !== false;
-            $quality = $cache['ratings']['quality'] ?? null;
+            $quality = $cache['waba']['quality'] ?? $cache['ratings']['quality'] ?? null;
             $tpl = "{$approved} plantilla(s) aprobada(s)" . ($pending ? ", {$pending} en revisión" : '');
             if (!isset($cache['health'])) {
                 $wa = ['status' => 'warning', 'message' => 'Estado sin consultar (abre WhatsApp → Línea). ' . $tpl . '.'];

@@ -30,6 +30,7 @@
         "credits": "php bin/credits.php",
         "voice-setup": "php bin/voice-setup.php",
         "sms-setup": "php bin/sms-setup.php",
+        "ses-events": "php bin/ses-events.php",
         "whatsapp": "php bin/whatsapp.php"
     },
     "require-dev": {

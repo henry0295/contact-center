@@ -29,6 +29,7 @@ class ReportController
     public const CHANNEL_LABELS = ['email' => 'Email', 'sms' => 'SMS', 'call' => 'Llamada', 'whatsapp' => 'WhatsApp'];
     public const DELIVERY_LABELS = [
         'accepted' => 'Aceptado', 'sent' => 'Enviado', 'delivered' => 'Entregado', 'read' => 'Leído', 'failed' => 'Fallido',
+        'bounced' => 'Rebotado', 'soft_bounce' => 'Rebote temporal', 'rejected' => 'Rechazado', 'complaint' => 'Queja',
     ];
 
     private const EXPORT_LIMIT = 50000;
@@ -126,6 +127,7 @@ class ReportController
             'byChannel'           => array_values($byChannel),
             'dailySeries'         => $r->dailySeries($since, $until),
             'whatsappFunnel'      => $r->whatsappFunnel($since, $until),
+            'emailDelivery'       => $r->emailDelivery($since, $until) + ['tracking' => \App\Service\SesEventService::isConfigured()],
             'callOutcomes'        => $r->callOutcomes($since, $until),
             'replies'             => $replies,
             'failureReasons'      => $r->failureReasons($since, $until),

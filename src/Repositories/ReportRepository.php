@@ -150,6 +150,40 @@ class ReportRepository
     }
 
     /**
+     * Estados de entrega de los emails del rango (eventos de SES).
+     *
+     * @return array{sent:int,delivered:int,bounced:int,softBounced:int,rejected:int,pending:int,deliveredRate:float,bounceRate:float}
+     */
+    public function emailDelivery(string $since, string $until): array
+    {
+        $stmt = $this->pdo->prepare(
+            "SELECT SUM(cr.status IN ('Sent', 'Failed') AND cr.external_id IS NOT NULL) AS tracked,
+                    SUM(cr.delivery_status = 'delivered') AS delivered,
+                    SUM(cr.delivery_status = 'bounced') AS bounced,
+                    SUM(cr.delivery_status = 'soft_bounce') AS soft,
+                    SUM(cr.delivery_status = 'rejected') AS rejected,
+                    SUM(cr.status = 'Sent' AND cr.delivery_status = 'accepted') AS pending
+               FROM campaign_recipients cr JOIN campaigns c ON c.id = cr.campaign_id
+              WHERE c.channel = 'email' AND c.created_at >= :since AND c.created_at < :until"
+        );
+        $stmt->execute([':since' => $since, ':until' => $until]);
+        $r = $stmt->fetch() ?: [];
+        $tracked = (int) ($r['tracked'] ?? 0);
+        $bounced = (int) ($r['bounced'] ?? 0);
+
+        return [
+            'sent'          => $tracked,
+            'delivered'     => (int) ($r['delivered'] ?? 0),
+            'bounced'       => $bounced,
+            'softBounced'   => (int) ($r['soft'] ?? 0),
+            'rejected'      => (int) ($r['rejected'] ?? 0),
+            'pending'       => (int) ($r['pending'] ?? 0),
+            'deliveredRate' => self::rate((int) ($r['delivered'] ?? 0), $tracked),
+            'bounceRate'    => self::rate($bounced, $tracked),
+        ];
+    }
+
+    /**
      * Resultado de las llamadas del rango.
      *
      * @return array{answered:int,busy:int,noAnswer:int,otherFailed:int,dialing:int,answerRate:float}

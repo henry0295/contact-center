@@ -77,6 +77,37 @@ class CampaignRecipientRepository
         $stmt->execute();
     }
 
+    /** Guarda el id del proveedor (MessageId de SES) para casar los eventos de entrega. */
+    public function setExternalId(int $id, string $externalId, ?string $deliveryStatus = null): void
+    {
+        $stmt = $this->pdo->prepare('UPDATE campaign_recipients SET external_id = :ext, delivery_status = :ds WHERE id = :id');
+        $stmt->bindValue(':ext', mb_substr($externalId, 0, 128));
+        $stmt->bindValue(':ds', $deliveryStatus, $deliveryStatus === null ? PDO::PARAM_NULL : PDO::PARAM_STR);
+        $stmt->bindValue(':id', $id, PDO::PARAM_INT);
+        $stmt->execute();
+    }
+
+    /** Destinatario de email por el MessageId de SES (con su campaña). */
+    public function findEmailByExternalId(string $externalId): ?array
+    {
+        $stmt = $this->pdo->prepare(
+            "SELECT cr.* FROM campaign_recipients cr JOIN campaigns c ON c.id = cr.campaign_id
+              WHERE cr.external_id = :ext AND c.channel = 'email' LIMIT 1"
+        );
+        $stmt->execute([':ext' => $externalId]);
+        $row = $stmt->fetch();
+
+        return $row === false ? null : $row;
+    }
+
+    public function setDeliveryStatus(int $id, string $status): void
+    {
+        $stmt = $this->pdo->prepare('UPDATE campaign_recipients SET delivery_status = :s WHERE id = :id');
+        $stmt->bindValue(':s', mb_substr($status, 0, 16));
+        $stmt->bindValue(':id', $id, PDO::PARAM_INT);
+        $stmt->execute();
+    }
+
     public function markFailed(int $id, string $error): void
     {
         $stmt = $this->pdo->prepare("UPDATE campaign_recipients SET status = 'Failed', error = :error WHERE id = :id");
