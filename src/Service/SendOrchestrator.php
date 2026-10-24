@@ -86,8 +86,44 @@ class SendOrchestrator
     public function dispatch(array $input): array
     {
         $channel = $input['channel'];
-        if (!in_array($channel, ['email', 'sms', 'call'], true)) {
-            throw new \InvalidArgumentException('Canal inválido (email, sms o call).');
+        if (!in_array($channel, ['email', 'sms', 'call', 'whatsapp'], true)) {
+            throw new \InvalidArgumentException('Canal inválido (email, sms, call o whatsapp).');
+        }
+
+        // WhatsApp: el contenido es una plantilla aprobada; `body` se guarda como
+        // referencia (el texto de la plantilla) para el historial y los informes.
+        $waTemplate = null;
+        $waParamsJson = null;
+        if ($channel === 'whatsapp') {
+            $waTemplate = (new \App\Repositories\WhatsAppRepository())->findTemplate((int) ($input['waTemplateId'] ?? 0));
+            if ($waTemplate === null) {
+                throw new \InvalidArgumentException('Selecciona una plantilla de WhatsApp.');
+            }
+            if ($waTemplate['status'] !== 'APPROVED') {
+                throw new \InvalidArgumentException('La plantilla "' . $waTemplate['element_name'] . '" aún no está aprobada por Meta.');
+            }
+            $params = array_values(array_map('strval', (array) ($input['waParams'] ?? [])));
+            if (count($params) < $waTemplate['var_count']) {
+                throw new \InvalidArgumentException('La plantilla necesita ' . $waTemplate['var_count'] . ' valor(es) para sus variables {{1}}..{{' . $waTemplate['var_count'] . '}}.');
+            }
+            foreach ($params as $i => $p) {
+                if (trim($p) === '' && $i < $waTemplate['var_count']) {
+                    throw new \InvalidArgumentException('La variable {{' . ($i + 1) . '}} está vacía.');
+                }
+            }
+            $media = null;
+            $mediaLink = trim((string) ($input['waHeaderMedia'] ?? ''));
+            if (in_array($waTemplate['template_type'], ['IMAGE', 'VIDEO', 'DOCUMENT'], true)) {
+                if (!preg_match('#^https://#i', $mediaLink)) {
+                    throw new \InvalidArgumentException('Esta plantilla lleva ' . strtolower($waTemplate['template_type']) . ' en la cabecera: indica su URL https.');
+                }
+                $media = ['type' => strtolower($waTemplate['template_type']), 'link' => $mediaLink];
+            }
+            $waParamsJson = json_encode(
+                ['body' => array_slice($params, 0, $waTemplate['var_count']), 'header_media' => $media],
+                JSON_UNESCAPED_UNICODE
+            );
+            $input['body'] = (string) $waTemplate['body'];
         }
 
         $body = (string) ($input['body'] ?? '');
@@ -155,7 +191,7 @@ class SendOrchestrator
         // Saldo: el lote completo debe estar cubierto ANTES de registrar nada.
         // El cobro real se hace por envío en CampaignService (si un envío
         // falla, no se cobra). Lanza InsufficientCreditException (400/402).
-        $this->credits->assertCanAfford($channel, count($recipients));
+        $this->credits->assertCanAfford(CreditService::priceKey($channel, $waTemplate['category'] ?? null), count($recipients));
 
         // Email de respuesta elegido en el compositor (solo email):
         //   null  -> el de respuesta por defecto (si hay)
@@ -187,6 +223,8 @@ class SendOrchestrator
             'replyTo'         => $replyTo,
             // Doble vía: solo SMS con IT Cloud. NULL = 1via (por defecto del proveedor).
             'smsType'         => ($channel === 'sms' && !empty($input['twoWay']) && SmsService::provider() === 'itcloud') ? '2via' : null,
+            'waTemplateId'    => $waTemplate['id'] ?? null,
+            'waParamsJson'    => $waParamsJson,
         ]);
 
         $this->recipients->addMany($campaignId, $recipients);
@@ -332,7 +370,7 @@ class SendOrchestrator
                 $contact = $this->contacts->firstOrCreate(
                     trim((string) ($value['name'] ?? '')) ?: null,
                     $channel === 'email' ? $target : (trim((string) ($value['email'] ?? '')) ?: null),
-                    $channel === 'sms' ? $target : (trim((string) ($value['phone'] ?? '')) ?: null)
+                    $channel !== 'email' ? $target : (trim((string) ($value['phone'] ?? '')) ?: null)
                 );
 
                 $vars = [];

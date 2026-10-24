@@ -30,7 +30,8 @@
         "backup": "php bin/backup-db.php",
         "credits": "php bin/credits.php",
         "voice-setup": "php bin/voice-setup.php",
-        "sms-setup": "php bin/sms-setup.php"
+        "sms-setup": "php bin/sms-setup.php",
+        "whatsapp": "php bin/whatsapp.php"
     },
     "require-dev": {
         "phpunit/phpunit": "^10.5"

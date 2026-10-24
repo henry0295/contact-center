@@ -57,6 +57,11 @@ VOICE_STATUS="sin configurar"
 # como variables de entorno o se piden por consola.
 SKIP_SMS=0
 SMS_STATUS="sin configurar"
+# WhatsApp (Gupshup). Solo se activa si se exportan GUPSHUP_PARTNER_EMAIL y
+# GUPSHUP_PARTNER_SECRET (no se guardan). WA_NAME: nombre de la app.
+SKIP_WA=0
+WA_NAME="${WA_NAME:-}"
+WA_STATUS="sin activar"
 SKIP_FETCH=0
 # phpMyAdmin en /phpmyadmin/ (se instala por defecto). PMA_ALLOW: lista de
 # IPs/CIDR separadas por comas que pueden abrirlo (vacío = cualquiera, con
@@ -91,6 +96,8 @@ Opciones:
   --voice-url <url>       API de voz (por defecto http://indoor-qvmdkkckkpc.dynamic-m.com:8000).
   --no-voice              No crear el usuario/token de la API de voz.
   --no-sms                No configurar el proveedor de SMS.
+  --wa-name <nombre>      Nombre de la app de WhatsApp en Gupshup (por defecto, el hostname).
+  --no-whatsapp           No activar la línea de WhatsApp.
   --no-phpmyadmin         No instalar phpMyAdmin (o retirarlo; --phpmyadmin lo reactiva).
   --pma-allow <ips>       Solo estas IPs/CIDR pueden abrir /phpmyadmin/ (ej. 192.168.101.0/24).
                           Por defecto: solo redes privadas. "any" = cualquier IP.
@@ -98,6 +105,8 @@ Opciones:
   se da, se pide por consola; Enter la omite).
   Variables SMS_EMAIL y SMS_TOKEN: cuenta del cliente en el proveedor de SMS
   (IT Cloud / contacto-virtual.com). Si no se dan, se piden por consola.
+  Variables GUPSHUP_PARTNER_EMAIL y GUPSHUP_PARTNER_SECRET: credenciales de
+  partner de Vozip en Gupshup; activan la línea de WhatsApp (no se guardan).
 EOF
 }
 
@@ -151,6 +160,8 @@ while [[ $# -gt 0 ]]; do
     --voice-url)   VOICE_URL="${2:?Falta el valor de --voice-url}"; VOICE_URL_SET=1; shift 2 ;;
     --no-voice)    SKIP_VOICE=1; shift ;;
     --no-sms)      SKIP_SMS=1; shift ;;
+    --wa-name)     WA_NAME="${2:?Falta el valor de --wa-name}"; shift 2 ;;
+    --no-whatsapp) SKIP_WA=1; shift ;;
     --no-phpmyadmin) SKIP_PMA=1; shift ;;
     --phpmyadmin)  SKIP_PMA=0; shift ;;
     --pma-allow)   PMA_ALLOW="${2:?Falta el valor de --pma-allow}"; shift 2 ;;
@@ -671,6 +682,13 @@ configure_env() {
   if [[ -z "$(grep -E '^SMS_INBOUND_SECRET=' "$APP_DIR/.env" | cut -d= -f2-)" ]]; then
     set_env SMS_INBOUND_SECRET "$(openssl rand -hex 24)"
   fi
+  # WhatsApp (Gupshup): token de la app de este cliente y secreto del webhook.
+  ensure_env GUPSHUP_APP_ID ""
+  ensure_env GUPSHUP_APP_TOKEN ""
+  ensure_env WHATSAPP_WEBHOOK_SECRET ""
+  if [[ -z "$(grep -E '^WHATSAPP_WEBHOOK_SECRET=' "$APP_DIR/.env" | cut -d= -f2-)" ]]; then
+    set_env WHATSAPP_WEBHOOK_SECRET "$(openssl rand -hex 24)"
+  fi
 
   chown "$APP_USER:$WEB_USER" "$APP_DIR/.env"
   chmod 640 "$APP_DIR/.env"
@@ -788,6 +806,52 @@ configure_sms() {
 
   warn "Proveedor de SMS sin configurar: los SMS no saldrán todavía."
   SMS_STATUS="pendiente: sudo SMS_EMAIL='<email>' SMS_TOKEN='<token>' $APP_DIR/deploy.sh update"
+  return 0
+}
+
+# ------------------------------------------------------------- WhatsApp -----
+# Línea de WhatsApp por la Partner API de Gupshup. Solo se activa si se dan
+# las credenciales de PARTNER de Vozip por variables de entorno
+# (GUPSHUP_PARTNER_EMAIL / GUPSHUP_PARTNER_SECRET); viajan a bin/whatsapp.php
+# por un archivo temporal 600 y NO se guardan en este servidor. En el .env
+# queda solo el token de la app de este cliente.
+configure_whatsapp() {
+  if [[ "$SKIP_WA" == 1 ]]; then WA_STATUS="omitido (--no-whatsapp)"; return 0; fi
+  # activate/link/token/subscribe escriben el .env: como el usuario de la app.
+  local cli="sudo --preserve-env=GUPSHUP_PARTNER_EMAIL,GUPSHUP_PARTNER_SECRET -u ${APP_USER} ${PHP_BIN} ${APP_DIR}/bin/whatsapp.php"
+  local app_id token
+  app_id="$(grep -E '^GUPSHUP_APP_ID=' "$APP_DIR/.env" | cut -d= -f2- || true)"
+  token="$(grep -E '^GUPSHUP_APP_TOKEN=' "$APP_DIR/.env" | cut -d= -f2- || true)"
+
+  if [[ -z "${GUPSHUP_PARTNER_EMAIL:-}" || -z "${GUPSHUP_PARTNER_SECRET:-}" ]]; then
+    if [[ -n "$app_id" && -n "$token" ]]; then
+      WA_STATUS="activada (app ${app_id}); estado: sudo -u ${WEB_USER} ${PHP_BIN} ${APP_DIR}/bin/whatsapp.php status"
+    else
+      WA_STATUS="sin activar: export GUPSHUP_PARTNER_EMAIL/GUPSHUP_PARTNER_SECRET y ${cli} activate --name=<cliente>"
+    fi
+    return 0
+  fi
+
+  log "WhatsApp (Gupshup): activando la línea de este cliente"
+  local name="${WA_NAME:-}"
+  [[ -n "$name" ]] || name="$(hostname -s 2>/dev/null || echo cliente)"
+  name="$(printf '%s' "$name" | tr -cd 'A-Za-z0-9')"
+  local tmp rc=0
+  tmp="$(mktemp)"
+  chmod 600 "$tmp"
+  printf '%s\n%s\n' "$GUPSHUP_PARTNER_EMAIL" "$GUPSHUP_PARTNER_SECRET" > "$tmp"
+  chown "$APP_USER" "$tmp"
+  as_app "cd '$APP_DIR' && GUPSHUP_PARTNER_EMAIL=\"\$(sed -n 1p '$tmp')\" GUPSHUP_PARTNER_SECRET=\"\$(sed -n 2p '$tmp')\" '$PHP_BIN' bin/whatsapp.php activate --name='$name'" || rc=$?
+  rm -f "$tmp"
+  if [[ -f "$APP_DIR/.env.bak" ]]; then shred -u "$APP_DIR/.env.bak" 2>/dev/null || rm -f "$APP_DIR/.env.bak"; fi
+  if [[ $rc == 0 ]]; then
+    local link
+    link="$(grep -E '^WHATSAPP_ONBOARDING_LINK=' "$APP_DIR/.env" | cut -d= -f2- || true)"
+    WA_STATUS="app creada; el cliente debe abrir el enlace de registro: ${link:-${cli} link}"
+  else
+    warn "No se pudo activar WhatsApp (ver el error arriba)."
+    WA_STATUS="ERROR al activar; reintenta: ${cli} activate --name=${name}"
+  fi
   return 0
 }
 
@@ -1376,6 +1440,8 @@ summary() {
    URL para recibir respuestas (SMS doble vía), dásela también al proveedor:
      $(sms_inbound_url)
    (debe ser accesible desde Internet; con una IP privada no llegarán respuestas)
+ WhatsApp:       ${WA_STATUS}
+   (los estados y respuestas llegan a ${scheme}://${HOST}/api/webhooks/whatsapp: requiere dominio https público)
 
  phpMyAdmin:     ${PMA_STATUS}$(if [[ "$PMA_STATUS" == instalado ]]; then printf '\n   %s://%s/phpmyadmin/\n   Credenciales (acceso web y usuario de BD):  sudo cat %s' "$scheme" "$HOST" "$PMA_CREDS"; fi)
 
@@ -1414,6 +1480,7 @@ if [[ "$CMD" == install ]]; then
   configure_env
   configure_voice
   configure_sms
+  configure_whatsapp
   fix_perms
   configure_selinux_booleans
   setup_database
@@ -1445,6 +1512,8 @@ else
   configure_sms
   ok "SMS: $SMS_STATUS"
   if [[ -n "$HOST" ]]; then ok "URL de respuestas SMS (doble vía) para el proveedor: $(sms_inbound_url)"; fi
+  configure_whatsapp
+  ok "WhatsApp: $WA_STATUS"
   fix_perms
   log "Aplicando esquema (idempotente)"
   mysql < "$APP_DIR/database/schema.sql"

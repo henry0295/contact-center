@@ -58,6 +58,10 @@ $app->get('/unsubscribe/{token}', 'App\Controllers\UnsubscribeController:unsubsc
 // sesión. Se protege con el secreto aleatorio SMS_INBOUND_SECRET de la URL.
 $app->map(['GET', 'POST'], '/api/sms/inbound/{secret}', 'App\Controllers\SmsReplyController:inbound');
 
+// Webhook de Gupshup (WhatsApp): estados de entrega, respuestas y aprobación
+// de plantillas. Se protege con la cabecera X-Gupshup-Webhook-Secret.
+$app->post('/api/webhooks/whatsapp', 'App\Controllers\WhatsAppController:webhook');
+
 // Catch-all de preflight CORS: el middleware de app añade las cabeceras.
 // Debe quedar fuera del grupo protegido para que OPTIONS no exija token.
 $app->options('/api/{routes:.+}', function (Request $req, $res) {
@@ -95,6 +99,11 @@ $app->group('/api', function ($group) {
         $admin->delete('/senders/{email}', 'App\Controllers\SenderVerificationController:deleteSender');
 
         $admin->delete('/suppressions/{email}', 'App\Controllers\ReportController:removeSuppression');
+
+        // WhatsApp: plantillas (las aprueba Meta; crearlas es de administrador).
+        $admin->post('/whatsapp/templates', 'App\Controllers\WhatsAppController:createTemplate');
+        $admin->post('/whatsapp/templates/sync', 'App\Controllers\WhatsAppController:syncTemplates');
+        $admin->delete('/whatsapp/templates/{id}', 'App\Controllers\WhatsAppController:deleteTemplate');
         $admin->delete('/campaigns/{id}', 'App\Controllers\CampaignController:delete');
     })->add(new RoleMiddleware('admin'));
 
@@ -115,6 +124,14 @@ $app->group('/api', function ($group) {
     $group->post('/sms/estimate', 'App\Controllers\SmsController:estimate');
     $group->get('/sms/fields', 'App\Controllers\SmsController:fields');
     $group->get('/sms/replies', 'App\Controllers\SmsReplyController:list');
+
+    // WhatsApp (Gupshup)
+    $group->get('/whatsapp/status', 'App\Controllers\WhatsAppController:status');
+    $group->get('/whatsapp/templates', 'App\Controllers\WhatsAppController:templates');
+    $group->get('/whatsapp/fields', 'App\Controllers\WhatsAppController:fields');
+    $group->post('/whatsapp/send', 'App\Controllers\WhatsAppController:send');
+    $group->post('/whatsapp/test', 'App\Controllers\WhatsAppController:test');
+    $group->get('/whatsapp/replies', 'App\Controllers\WhatsAppController:replies');
 
     // Llamadas de voz (TTS + Asterisk, API externa en 192.168.101.92:8000).
     $group->get('/calls/capabilities', 'App\Controllers\CallController:capabilities');

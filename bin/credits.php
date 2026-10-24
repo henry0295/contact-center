@@ -77,7 +77,7 @@ Uso: php bin/credits.php <comando> [opciones]
   adjust <±valor> [--note=...]     Ajuste manual (positivo o negativo)
   history [--limit=30] [--type=recharge|debit|refund|adjust]
   prices                           Precio por canal
-  set-price <sms|email|call> <valor>
+  set-price <sms|email|call|whatsapp_marketing|whatsapp_utility|whatsapp_authentication> <valor>
   usage [--since=AAAA-MM-DD]       Consumo por canal (por defecto, este mes)
 
 TXT;
@@ -133,7 +133,7 @@ try {
         case 'prices':
             foreach (CreditService::CHANNELS as $ch) {
                 $prices = $credits->prices();
-                printf("  %-16s %s\n", CreditService::LABELS[$ch], isset($prices[$ch]) ? CreditService::money($prices[$ch]) : '(sin precio)');
+                printf("  %-24s %s\n", CreditService::LABELS[$ch], isset($prices[$ch]) ? CreditService::money($prices[$ch]) : '(sin precio)');
             }
             break;
 
@@ -153,10 +153,10 @@ try {
             echo "Consumo desde {$since}:\n";
             $total = 0.0;
             foreach ($rows as $r) {
-                printf("  %-16s %8d envíos  %12s\n", CreditService::LABELS[$r['channel']] ?? $r['channel'], (int) $r['units'], CreditService::money((float) $r['spent']));
+                printf("  %-24s %8d envíos  %12s\n", CreditService::LABELS[$r['channel']] ?? $r['channel'], (int) $r['units'], CreditService::money((float) $r['spent']));
                 $total += (float) $r['spent'];
             }
-            printf("  %-16s %8s         %12s\n", 'Total', '', CreditService::money($total));
+            printf("  %-24s %8s         %12s\n", 'Total', '', CreditService::money($total));
             break;
 
         case 'help':

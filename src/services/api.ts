@@ -187,7 +187,7 @@ export interface Template {
 export interface Campaign {
   id: number;
   name: string;
-  channel: 'email' | 'sms' | 'call';
+  channel: 'email' | 'sms' | 'call' | 'whatsapp';
   template_id: number | null;
   subject: string | null;
   body: string | null;
@@ -741,6 +741,130 @@ export interface Balance {
 
 export function getBalance(): Promise<Balance> {
   return request('/balance');
+}
+
+// ---- WhatsApp (Gupshup) ----
+export type WaCategory = 'MARKETING' | 'UTILITY' | 'AUTHENTICATION';
+
+export interface WaButton {
+  type: 'QUICK_REPLY' | 'URL' | string;
+  text: string;
+  url?: string;
+}
+
+export interface WaTemplate {
+  id: number;
+  external_id: string | null;
+  element_name: string;
+  language: string;
+  category: WaCategory | string;
+  /** TEXT, IMAGE, VIDEO, DOCUMENT... */
+  template_type: string;
+  header: string | null;
+  body: string;
+  footer: string | null;
+  buttons: WaButton[];
+  example: string | null;
+  /** Número de variables {{1}}..{{n}} del cuerpo. */
+  var_count: number;
+  /** APPROVED, PENDING, REJECTED, PAUSED, DISABLED... */
+  status: string;
+  reason: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WaStatus {
+  configured: boolean;
+  appId: string | null;
+  healthy: boolean;
+  healthMessage: string | null;
+  /** Calidad del número según Meta (GREEN, YELLOW, RED). */
+  quality: string | null;
+  /** Límite de conversaciones iniciadas por día (TIER_1K...). */
+  messagingLimit: string | null;
+  checkedAt: string | null;
+  /** Solo para administradores: enlace de registro de la línea. */
+  onboardingLink: string | null;
+  webhookConfigured: boolean;
+}
+
+export interface WaReply {
+  id: number;
+  phone: string;
+  profile_name: string | null;
+  message_type: string;
+  message: string;
+  campaign_id: number | null;
+  campaign_name: string | null;
+  contact_name: string | null;
+  is_optout: boolean;
+  received_at: string;
+}
+
+export interface WaSendPayload {
+  name?: string;
+  templateId: number;
+  /** Valores de {{1}}..{{n}}; admiten campos como {{nombre}}. */
+  params: string[];
+  /** URL pública de la imagen/video/documento de cabecera (plantillas multimedia). */
+  headerMediaUrl?: string;
+  recipients?: (string | RecipientRow)[];
+  listId?: number;
+  tags?: string;
+  scheduleType?: 'now' | 'scheduled';
+  scheduledAt?: string;
+  expiresAt?: string;
+}
+
+export interface WaTemplateInput {
+  name: string;
+  category: WaCategory;
+  language: string;
+  header?: string;
+  body: string;
+  footer?: string;
+  /** Un ejemplo por variable, en orden. */
+  examples: string[];
+  buttons?: WaButton[];
+}
+
+export function getWhatsAppStatus(refresh = false): Promise<WaStatus> {
+  return request('/whatsapp/status' + (refresh ? '?refresh=1' : ''));
+}
+
+export function listWaTemplates(status?: string): Promise<{ templates: WaTemplate[] }> {
+  return request('/whatsapp/templates' + qs({ status }));
+}
+
+export function syncWaTemplates(): Promise<{ success: boolean; synced: number; templates: WaTemplate[] }> {
+  return request('/whatsapp/templates/sync', { method: 'POST' });
+}
+
+export function createWaTemplate(payload: WaTemplateInput): Promise<{ success: boolean; message: string; template: WaTemplate }> {
+  return request('/whatsapp/templates', { method: 'POST', body: jsonBody(payload) });
+}
+
+export function deleteWaTemplate(id: number): Promise<{ success: boolean }> {
+  return request(`/whatsapp/templates/${id}`, { method: 'DELETE' });
+}
+
+export function sendWhatsApp(payload: WaSendPayload): Promise<DispatchResponse> {
+  return request('/whatsapp/send', { method: 'POST', body: jsonBody(payload) });
+}
+
+export function sendWhatsAppTest(payload: { to: string; templateId: number; params: string[]; headerMediaUrl?: string }): Promise<DispatchResponse> {
+  return request('/whatsapp/test', { method: 'POST', body: jsonBody(payload) });
+}
+
+export function waFields(): Promise<{ fields: PersonalizationField[] }> {
+  return request('/whatsapp/fields');
+}
+
+export function listWaReplies(params: { page?: number; perPage?: number; q?: string } = {}): Promise<{
+  replies: WaReply[]; total: number; page: number; perPage: number;
+}> {
+  return request('/whatsapp/replies' + qs(params));
 }
 
 // ---- Dashboard ----

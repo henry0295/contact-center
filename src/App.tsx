@@ -18,6 +18,7 @@ const Dashboard = lazy(() => import('./pages/Dashboard'));
 const EmailModule = lazy(() => import('./pages/EmailModule'));
 const SMSModule = lazy(() => import('./pages/SMSModule'));
 const CallModule = lazy(() => import('./pages/CallModule'));
+const WhatsAppModule = lazy(() => import('./pages/WhatsAppModule'));
 const Reports = lazy(() => import('./pages/Reports'));
 const Verification = lazy(() => import('./pages/Verification'));
 const Contacts = lazy(() => import('./pages/Contacts'));
@@ -51,6 +52,7 @@ function App() {
                     <Route path="email" element={<EmailModule />} />
                     <Route path="sms" element={<SMSModule />} />
                     <Route path="calls" element={<CallModule />} />
+                    <Route path="whatsapp" element={<WhatsAppModule />} />
                     <Route path="reports" element={<Reports />} />
                     {/* El módulo "Campañas" se retiró del menú: cada envío de SMS/Email
                         crea su propia campaña, y se gestionan desde Reportes > Campañas.

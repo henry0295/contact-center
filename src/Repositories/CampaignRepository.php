@@ -101,10 +101,12 @@ class CampaignRepository
         $stmt = $this->pdo->prepare(
             'INSERT INTO campaigns
                 (name, channel, template_id, subject, body, status, scheduled_at, total_recipients,
-                 sender_id, expires_at, tags, segments, cost_estimate, origin, voice_gender, reply_to, sms_type)
+                 sender_id, expires_at, tags, segments, cost_estimate, origin, voice_gender, reply_to, sms_type,
+                 wa_template_id, wa_params_json)
              VALUES
                 (:name, :channel, :template_id, :subject, :body, :status, :scheduled_at, :total,
-                 :sender_id, :expires_at, :tags, :segments, :cost, :origin, :voice_gender, :reply_to, :sms_type)'
+                 :sender_id, :expires_at, :tags, :segments, :cost, :origin, :voice_gender, :reply_to, :sms_type,
+                 :wa_template_id, :wa_params_json)'
         );
 
         $nullable = static fn ($v): int => $v === null ? PDO::PARAM_NULL : PDO::PARAM_STR;
@@ -126,6 +128,8 @@ class CampaignRepository
         $stmt->bindValue(':voice_gender', $data['voiceGender'] ?? null, $nullable($data['voiceGender'] ?? null));
         $stmt->bindValue(':reply_to', $data['replyTo'] ?? null, $nullable($data['replyTo'] ?? null));
         $stmt->bindValue(':sms_type', $data['smsType'] ?? null, $nullable($data['smsType'] ?? null));
+        $stmt->bindValue(':wa_template_id', $data['waTemplateId'] ?? null, isset($data['waTemplateId']) ? PDO::PARAM_INT : PDO::PARAM_NULL);
+        $stmt->bindValue(':wa_params_json', $data['waParamsJson'] ?? null, $nullable($data['waParamsJson'] ?? null));
         $stmt->execute();
 
         return (int) $this->pdo->lastInsertId();

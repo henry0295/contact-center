@@ -21,10 +21,28 @@ use PDO;
 class CreditService
 {
     /** Canales que se cobran. */
-    public const CHANNELS = ['sms', 'email', 'call'];
+    public const CHANNELS = ['sms', 'email', 'call', 'whatsapp_marketing', 'whatsapp_utility', 'whatsapp_authentication'];
 
     /** Etiquetas para mensajes y la consola. */
-    public const LABELS = ['sms' => 'SMS', 'email' => 'Email', 'call' => 'Llamada de voz'];
+    public const LABELS = [
+        'sms'                     => 'SMS',
+        'email'                   => 'Email',
+        'call'                    => 'Llamada de voz',
+        'whatsapp_marketing'      => 'WhatsApp marketing',
+        'whatsapp_utility'        => 'WhatsApp utilidad',
+        'whatsapp_authentication' => 'WhatsApp autenticación',
+    ];
+
+    /** Clave de precio de un envío: WhatsApp se cobra según la categoría de la plantilla. */
+    public static function priceKey(string $channel, ?string $waCategory = null): string
+    {
+        if ($channel !== 'whatsapp') {
+            return $channel;
+        }
+        $cat = strtolower((string) $waCategory);
+
+        return in_array($cat, ['marketing', 'utility', 'authentication'], true) ? 'whatsapp_' . $cat : 'whatsapp_marketing';
+    }
 
     /** Por debajo de este % del saldo de referencia, el medidor avisa en rojo. */
     public const LOW_PERCENT = 20;

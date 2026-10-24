@@ -862,6 +862,29 @@ sudo -u nginx php $APP/bin/credits.php adjust -5000 --note="Corrección"
 
 (En Debian/Ubuntu el usuario es `www-data`.) Los valores van sin puntos de miles (`100000`, no `100.000`).
 
+### 14.1.1 WhatsApp (Gupshup)
+
+WhatsApp sale por la **Partner API de Gupshup**. Cada cliente tiene su propia línea (una "app" de Gupshup). En el `.env` solo queda el **token de la app de ese cliente** (`GUPSHUP_APP_ID`, `GUPSHUP_APP_TOKEN`). Las **credenciales de partner de Vozip** se pasan por variables de entorno al activar y **nunca se guardan en el servidor**.
+
+```bash
+APP=/var/www/contact-center
+export GUPSHUP_PARTNER_EMAIL='<email partner>'
+read -rs GUPSHUP_PARTNER_SECRET; export GUPSHUP_PARTNER_SECRET
+# Crea la app (o reutiliza GUPSHUP_APP_ID), genera el enlace de registro, guarda el
+# token, crea WHATSAPP_WEBHOOK_SECRET y registra el webhook si APP_URL es https:
+sudo --preserve-env=GUPSHUP_PARTNER_EMAIL,GUPSHUP_PARTNER_SECRET -u contactcenter php $APP/bin/whatsapp.php activate --name=ClienteXYZ
+unset GUPSHUP_PARTNER_SECRET
+sudo systemctl reload php-fpm
+```
+
+- El cliente abre el **enlace de registro** (válido 5 días; también aparece en WhatsApp → Línea para administradores), entra con su Facebook, elige el portafolio y verifica el número.
+- Otros comandos (los de partner necesitan las mismas variables): `link [--regenerate]`, `token`, `subscribe` (webhook) y `status` (solo token de la app: `sudo -u nginx php $APP/bin/whatsapp.php status`).
+- Con `deploy.sh`: si se exportan `GUPSHUP_PARTNER_EMAIL`/`GUPSHUP_PARTNER_SECRET`, activa la línea solo (`--wa-name <nombre>`, por defecto el hostname; `--no-whatsapp` lo omite).
+- **Webhook** (estados de entrega, respuestas, aprobación de plantillas): `<APP_URL>/api/webhooks/whatsapp`, autenticado con la cabecera `X-Gupshup-Webhook-Secret`. Requiere **dominio público con https**; por IP privada los envíos salen pero no llegan estados ni respuestas. Tras configurar el dominio: `whatsapp.php subscribe`.
+- **Plantillas**: solo se envían las aprobadas por Meta. El administrador las crea (texto, hasta 3 botones) o las sincroniza en WhatsApp → Plantillas.
+- **Precios** por categoría de plantilla: marketing $90, utilidad $20, autenticación $20 (`credits.php set-price whatsapp_marketing 90`, `whatsapp_utility`, `whatsapp_authentication`). Si WhatsApp informa que no entregó el mensaje, se reembolsa.
+- Quien responda **SALIR / STOP / BAJA** queda dado de baja.
+
 ### 14.2 Emails de respuesta (Reply-To)
 
 En **Verificación → Email de respuesta** se pueden agregar varias direcciones (de cualquier dominio; no necesitan verificación en SES porque solo van en la cabecera Reply-To). En el **módulo Email** hay un selector para elegir cuál usar en cada envío, o "Sin email de respuesta". Las campañas programadas conservan la elección.

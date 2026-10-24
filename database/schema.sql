@@ -390,3 +390,71 @@ CREATE TABLE IF NOT EXISTS `sms_replies` (
     KEY `idx_sr_campaign` (`campaign_id`),
     KEY `idx_sr_phone` (`phone`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- =====================================================================
+-- WhatsApp (Gupshup Partner API, channel = 'whatsapp').
+-- Los masivos solo pueden usar plantillas aprobadas por Meta. La línea de
+-- cada instalación es una "app" de Gupshup (GUPSHUP_APP_ID en el .env).
+-- =====================================================================
+
+-- Plantillas sincronizadas con Gupshup/Meta.
+CREATE TABLE IF NOT EXISTS `whatsapp_templates` (
+    `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `external_id` VARCHAR(64) NULL,
+    `element_name` VARCHAR(180) NOT NULL,
+    `language` VARCHAR(16) NOT NULL DEFAULT 'es',
+    `category` VARCHAR(20) NOT NULL,
+    `template_type` VARCHAR(20) NOT NULL DEFAULT 'TEXT',
+    `header` VARCHAR(60) NULL,
+    `body` TEXT NOT NULL,
+    `footer` VARCHAR(60) NULL,
+    `buttons_json` TEXT NULL,
+    `example` TEXT NULL,
+    `var_count` TINYINT UNSIGNED NOT NULL DEFAULT 0,
+    `status` VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+    `reason` VARCHAR(500) NULL,
+    `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uq_wat_name_lang` (`element_name`, `language`),
+    KEY `idx_wat_status` (`status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Campaña de WhatsApp: plantilla usada y valores de sus variables {{1}}..{{n}}
+-- (cada valor puede llevar campos {{nombre}} que se resuelven por contacto).
+ALTER TABLE `campaigns` ADD COLUMN IF NOT EXISTS `wa_template_id` INT UNSIGNED NULL;
+ALTER TABLE `campaigns` ADD COLUMN IF NOT EXISTS `wa_params_json` TEXT NULL;
+
+-- Id del mensaje en el proveedor (Gupshup) para casar los estados del webhook,
+-- y último estado de entrega reportado (sent, delivered, read, failed).
+ALTER TABLE `campaign_recipients` ADD COLUMN IF NOT EXISTS `external_id` VARCHAR(128) NULL;
+ALTER TABLE `campaign_recipients` ADD COLUMN IF NOT EXISTS `delivery_status` VARCHAR(16) NULL;
+ALTER TABLE `campaign_recipients` ADD INDEX IF NOT EXISTS `idx_cr_external_id` (`external_id`);
+
+-- Mensajes entrantes (respuestas de los destinatarios).
+CREATE TABLE IF NOT EXISTS `whatsapp_inbound` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `wa_message_id` VARCHAR(128) NULL,
+    `phone` VARCHAR(32) NOT NULL,
+    `profile_name` VARCHAR(255) NULL,
+    `message_type` VARCHAR(20) NOT NULL DEFAULT 'text',
+    `message` TEXT NOT NULL,
+    `campaign_id` INT UNSIGNED NULL,
+    `contact_id` INT UNSIGNED NULL,
+    `is_optout` TINYINT(1) NOT NULL DEFAULT 0,
+    `received_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uq_wai_msgid` (`wa_message_id`),
+    KEY `idx_wai_received` (`received_at`),
+    KEY `idx_wai_phone` (`phone`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Precios de WhatsApp por categoría de plantilla (pesos). Cambiar con:
+--   php bin/credits.php set-price whatsapp_marketing 90
+-- Las claves de WhatsApp superan 16 caracteres: se amplía la columna.
+ALTER TABLE `credit_prices` MODIFY `channel` VARCHAR(32) NOT NULL;
+ALTER TABLE `credit_transactions` MODIFY `channel` VARCHAR(32) NULL;
+INSERT IGNORE INTO `credit_prices` (`channel`, `price`) VALUES
+    ('whatsapp_marketing', 90.00),
+    ('whatsapp_utility', 20.00),
+    ('whatsapp_authentication', 20.00);

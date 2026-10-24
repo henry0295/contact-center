@@ -1,0 +1,499 @@
+<?php
+
+namespace App\Controllers;
+
+use App\Repositories\CampaignRecipientRepository;
+use App\Repositories\CampaignRepository;
+use App\Repositories\WhatsAppRepository;
+use App\Service\CreditService;
+use App\Service\InsufficientCreditException;
+use App\Service\SendOrchestrator;
+use App\Service\WhatsAppService;
+use App\Support\Logger;
+use App\Support\Sms;
+use Psr\Http\Message\ResponseInterface as Response;
+use Psr\Http\Message\ServerRequestInterface as Request;
+
+/**
+ * Módulo de WhatsApp: estado de la línea, plantillas, envíos (como campaña),
+ * respuestas y el webhook de Gupshup.
+ */
+class WhatsAppController
+{
+    use JsonResponseTrait;
+
+    private const OPT_OUT_WORDS = ['salir', 'exit', 'remove', 'stop', 'baja', 'cancelar'];
+    private const CATEGORIES = ['MARKETING', 'UTILITY', 'AUTHENTICATION'];
+
+    private WhatsAppService $wa;
+    private WhatsAppRepository $repo;
+    private SendOrchestrator $orchestrator;
+
+    public function __construct(?WhatsAppService $wa = null, ?WhatsAppRepository $repo = null, ?SendOrchestrator $orchestrator = null)
+    {
+        $this->wa = $wa ?? new WhatsAppService();
+        $this->repo = $repo ?? new WhatsAppRepository();
+        $this->orchestrator = $orchestrator ?? new SendOrchestrator();
+    }
+
+    // ----------------------------------------------------------------- línea --
+
+    /**
+     * Estado de la línea. health se cachea 10 min y ratings 24 h (límites de
+     * la API de Gupshup: 10/min y 1 cada 24 h).
+     */
+    public function status(Request $request, Response $response): Response
+    {
+        $configured = $this->wa->isConfigured();
+        $refresh = filter_var($request->getQueryParams()['refresh'] ?? false, FILTER_VALIDATE_BOOLEAN);
+        $cacheFile = dirname(__DIR__, 2) . '/storage/whatsapp-status.json';
+        $cache = is_file($cacheFile) ? (json_decode((string) @file_get_contents($cacheFile), true) ?: []) : [];
+
+        if ($configured && ($refresh || (time() - (int) ($cache['health_at'] ?? 0)) > 600)) {
+            try {
+                $cache['health'] = $this->wa->health();
+            } catch (\Throwable $e) {
+                $cache['health'] = ['healthy' => false, 'message' => $e->getMessage()];
+            }
+            $cache['health_at'] = time();
+            if ((time() - (int) ($cache['ratings_at'] ?? 0)) > 86400) {
+                try {
+                    $cache['ratings'] = $this->wa->ratings();
+                } catch (\Throwable $e) {
+                    $cache['ratings'] = ['quality' => null, 'limit' => null, 'message' => $e->getMessage()];
+                }
+                $cache['ratings_at'] = time();
+            }
+            @file_put_contents($cacheFile, json_encode($cache));
+        }
+
+        $link = trim((string) ($_ENV['WHATSAPP_ONBOARDING_LINK'] ?? ''), " \"'");
+
+        return $this->jsonResponse($response, [
+            'configured'       => $configured,
+            'appId'            => $configured ? WhatsAppService::appId() : null,
+            'healthy'          => (bool) ($cache['health']['healthy'] ?? false),
+            'healthMessage'    => $cache['health']['message'] ?? null,
+            'quality'          => $cache['ratings']['quality'] ?? null,
+            'messagingLimit'   => $cache['ratings']['limit'] ?? null,
+            'checkedAt'        => isset($cache['health_at']) ? date('c', (int) $cache['health_at']) : null,
+            // Solo se comparte con administradores: es el enlace de alta de la línea.
+            'onboardingLink'   => $this->isAdmin($request) && preg_match('#^https://#', $link) ? $link : null,
+            'webhookConfigured' => trim((string) ($_ENV['WHATSAPP_WEBHOOK_SECRET'] ?? '')) !== '',
+        ]);
+    }
+
+    // ------------------------------------------------------------ plantillas --
+
+    public function templates(Request $request, Response $response): Response
+    {
+        $only = $request->getQueryParams()['status'] ?? null;
+        $only = is_string($only) && $only !== '' ? strtoupper($only) : null;
+
+        return $this->jsonResponse($response, ['templates' => $this->repo->templates($only)]);
+    }
+
+    /** Trae de Gupshup todas las plantillas y su estado (admin). */
+    public function syncTemplates(Request $request, Response $response): Response
+    {
+        try {
+            $remote = $this->wa->listTemplates();
+        } catch (\Throwable $e) {
+            return $this->jsonResponse($response, ['error' => $e->getMessage()], 502);
+        }
+
+        $n = 0;
+        foreach ($remote as $t) {
+            $meta = json_decode((string) ($t['containerMeta'] ?? ''), true) ?: [];
+            $body = (string) ($meta['data'] ?? $t['data'] ?? '');
+            if (($t['elementName'] ?? '') === '' || $body === '') {
+                continue;
+            }
+            $this->repo->upsertTemplate([
+                'external_id'   => (string) ($t['id'] ?? ''),
+                'element_name'  => (string) $t['elementName'],
+                'language'      => (string) ($t['languageCode'] ?? 'es'),
+                'category'      => strtoupper((string) ($t['category'] ?? 'MARKETING')),
+                'template_type' => strtoupper((string) ($t['templateType'] ?? 'TEXT')),
+                'header'        => isset($meta['header']) ? mb_substr((string) $meta['header'], 0, 60) : null,
+                'body'          => $body,
+                'footer'        => isset($meta['footer']) ? mb_substr((string) $meta['footer'], 0, 60) : null,
+                'buttons_json'  => isset($meta['buttons']) ? json_encode($meta['buttons'], JSON_UNESCAPED_UNICODE) : null,
+                'example'       => isset($meta['sampleText']) ? (string) $meta['sampleText'] : null,
+                'status'        => strtoupper((string) ($t['status'] ?? 'PENDING')),
+                'reason'        => isset($t['reason']) ? mb_substr((string) $t['reason'], 0, 500) : null,
+            ]);
+            $n++;
+        }
+
+        return $this->jsonResponse($response, [
+            'success'   => true,
+            'synced'    => $n,
+            'templates' => $this->repo->templates(),
+        ]);
+    }
+
+    /**
+     * Crea una plantilla de texto y la envía a aprobación de Meta (admin).
+     * body: {name, category, language, header?, body, footer?, examples[], buttons?[]}
+     */
+    public function createTemplate(Request $request, Response $response): Response
+    {
+        $d = (array) ($request->getParsedBody() ?? []);
+        $name = strtolower(trim((string) ($d['name'] ?? '')));
+        $category = strtoupper(trim((string) ($d['category'] ?? '')));
+        $language = trim((string) ($d['language'] ?? 'es'));
+        $header = trim((string) ($d['header'] ?? ''));
+        $body = trim((string) ($d['body'] ?? ''));
+        $footer = trim((string) ($d['footer'] ?? ''));
+        $examples = array_values(array_map(static fn ($v) => trim((string) $v), (array) ($d['examples'] ?? [])));
+
+        $error = null;
+        if (!preg_match('/^[a-z0-9_]{3,180}$/', $name)) {
+            $error = 'El nombre solo admite minúsculas, números y guion bajo (p.ej. promo_octubre).';
+        } elseif (!in_array($category, self::CATEGORIES, true)) {
+            $error = 'Categoría inválida (MARKETING, UTILITY o AUTHENTICATION).';
+        } elseif (!preg_match('/^[a-z]{2}(_[A-Z]{2})?$/', $language)) {
+            $error = 'Idioma inválido (p.ej. es, es_CO, en_US).';
+        } elseif ($body === '' || mb_strlen($body) > 1024) {
+            $error = 'El cuerpo es obligatorio y admite hasta 1024 caracteres.';
+        } elseif (mb_strlen($header) > 60 || mb_strlen($footer) > 60) {
+            $error = 'Encabezado y pie admiten hasta 60 caracteres.';
+        } elseif (preg_match('/\{\{/', $header . $footer)) {
+            $error = 'Las variables solo se permiten en el cuerpo.';
+        }
+
+        $vars = WhatsAppRepository::countVars($body);
+        if ($error === null) {
+            preg_match_all('/\{\{\s*(\d+)\s*\}\}/', $body, $m);
+            $nums = array_unique(array_map('intval', $m[1]));
+            sort($nums);
+            if ($vars > 0 && $nums !== range(1, $vars)) {
+                $error = 'Las variables deben ser consecutivas: {{1}}, {{2}}, ...';
+            } elseif (preg_match('/^\s*\{\{|\{\{\s*\d+\s*\}\}\s*$/', $body)) {
+                $error = 'Meta no permite que el cuerpo empiece o termine con una variable.';
+            } elseif (count($examples) < $vars || in_array('', array_slice($examples, 0, $vars), true)) {
+                $error = 'Escribe un ejemplo para cada variable (Meta lo usa para revisar la plantilla).';
+            }
+        }
+
+        $buttons = [];
+        if ($error === null) {
+            foreach ((array) ($d['buttons'] ?? []) as $b) {
+                $type = strtoupper((string) ($b['type'] ?? ''));
+                $text = trim((string) ($b['text'] ?? ''));
+                if ($text === '' || mb_strlen($text) > 25) {
+                    $error = 'Cada botón necesita un texto de hasta 25 caracteres.';
+                    break;
+                }
+                if ($type === 'QUICK_REPLY') {
+                    $buttons[] = ['type' => 'QUICK_REPLY', 'text' => $text];
+                } elseif ($type === 'URL') {
+                    $url = trim((string) ($b['url'] ?? ''));
+                    if (!preg_match('#^https://[^\s{}]+$#', $url)) {
+                        $error = 'El botón de enlace necesita una URL https fija.';
+                        break;
+                    }
+                    $buttons[] = ['type' => 'URL', 'text' => $text, 'url' => $url, 'buttonValue' => $url, 'suffix' => ''];
+                } else {
+                    $error = 'Tipo de botón inválido (QUICK_REPLY o URL).';
+                    break;
+                }
+            }
+            if ($error === null && count($buttons) > 3) {
+                $error = 'Máximo 3 botones.';
+            }
+        }
+        if ($error !== null) {
+            return $this->jsonResponse($response, ['error' => $error], 400);
+        }
+
+        // Ejemplo con el formato de Gupshup: las variables se sustituyen por [valor].
+        $example = preg_replace_callback(
+            '/\{\{\s*(\d+)\s*\}\}/',
+            static fn ($mm) => '[' . ($examples[(int) $mm[1] - 1] ?? 'ejemplo') . ']',
+            $body
+        );
+
+        try {
+            $remote = $this->wa->applyTemplate([
+                'elementName'  => $name,
+                'languageCode' => $language,
+                'category'     => $category,
+                'content'      => $body,
+                'example'      => (string) $example,
+                'header'       => $header !== '' ? $header : null,
+                'footer'       => $footer !== '' ? $footer : null,
+                'buttons'      => $buttons,
+            ]);
+        } catch (\Throwable $e) {
+            return $this->jsonResponse($response, ['error' => $e->getMessage()], 502);
+        }
+
+        $id = $this->repo->upsertTemplate([
+            'external_id'   => (string) ($remote['id'] ?? ''),
+            'element_name'  => $name,
+            'language'      => $language,
+            'category'      => $category,
+            'template_type' => 'TEXT',
+            'header'        => $header !== '' ? $header : null,
+            'body'          => $body,
+            'footer'        => $footer !== '' ? $footer : null,
+            'buttons_json'  => $buttons ? json_encode($buttons, JSON_UNESCAPED_UNICODE) : null,
+            'example'       => (string) $example,
+            'var_count'     => $vars,
+            'status'        => strtoupper((string) ($remote['status'] ?? 'PENDING')),
+        ]);
+
+        Logger::audit()->info('Plantilla de WhatsApp enviada a aprobación', array_merge(
+            Logger::requestContext(),
+            ['plantilla' => $name, 'categoria' => $category, 'por' => $request->getAttribute('user')['email'] ?? null]
+        ));
+
+        return $this->jsonResponse($response, [
+            'success'  => true,
+            'message'  => 'Plantilla enviada a Meta para aprobación. Suele tardar de minutos a 24 h.',
+            'template' => $this->repo->findTemplate($id),
+        ], 201);
+    }
+
+    /** Quita la plantilla de la lista local (no la borra en Meta). Admin. */
+    public function deleteTemplate(Request $request, Response $response, array $args): Response
+    {
+        $ok = $this->repo->deleteTemplate((int) ($args['id'] ?? 0));
+
+        return $this->jsonResponse($response, $ok ? ['success' => true] : ['error' => 'La plantilla no existe'], $ok ? 200 : 404);
+    }
+
+    // ---------------------------------------------------------------- envíos --
+
+    public function send(Request $request, Response $response): Response
+    {
+        return $this->dispatch($request, $response, 'direct', null);
+    }
+
+    public function test(Request $request, Response $response): Response
+    {
+        $to = trim((string) (($request->getParsedBody() ?? [])['to'] ?? ''));
+        if ($to === '') {
+            return $this->jsonResponse($response, ['error' => 'Indica el número para la prueba.'], 400);
+        }
+
+        return $this->dispatch($request, $response, 'test', [$to]);
+    }
+
+    private function dispatch(Request $request, Response $response, string $origin, ?array $forceRecipients): Response
+    {
+        $data = (array) ($request->getParsedBody() ?? []);
+        if (!$this->wa->isConfigured()) {
+            return $this->jsonResponse($response, ['error' => 'La línea de WhatsApp todavía no está activada.'], 409);
+        }
+
+        try {
+            $result = $this->orchestrator->dispatch([
+                'channel'       => 'whatsapp',
+                'name'          => $origin === 'test' ? 'PRUEBA-WHATSAPP-' . date('Y-m-d-H:i:s') : ($data['name'] ?? null),
+                'recipients'    => $forceRecipients ?? ($data['recipients'] ?? []),
+                'listId'        => $forceRecipients === null && !empty($data['listId']) ? (int) $data['listId'] : null,
+                'tags'          => $data['tags'] ?? null,
+                'scheduleType'  => $origin === 'test' ? 'now' : ($data['scheduleType'] ?? 'now'),
+                'scheduledAt'   => $data['scheduledAt'] ?? null,
+                'expiresAt'     => $data['expiresAt'] ?? null,
+                'origin'        => $origin,
+                'waTemplateId'  => (int) ($data['templateId'] ?? 0),
+                'waParams'      => (array) ($data['params'] ?? []),
+                'waHeaderMedia' => $data['headerMediaUrl'] ?? null,
+            ]);
+        } catch (\InvalidArgumentException $e) {
+            return $this->jsonResponse($response, ['error' => $e->getMessage()], $e instanceof InsufficientCreditException ? 402 : 400);
+        } catch (\Throwable $e) {
+            return $this->jsonResponse($response, ['error' => 'No se pudo registrar el envío', 'message' => $e->getMessage()], 500);
+        }
+
+        $allFailed = $result['mode'] === 'sent' && (int) ($result['result']['sent'] ?? 0) === 0;
+        if ($allFailed) {
+            $result['hint'] = $this->firstError((int) $result['campaign']['id']);
+        }
+        $status = $result['mode'] === 'sent' ? ($allFailed ? 502 : 200) : 202;
+
+        return $this->jsonResponse($response, array_merge($result, ['success' => !$allFailed]), $status);
+    }
+
+    private function firstError(int $campaignId): ?string
+    {
+        foreach ((new CampaignRecipientRepository())->forCampaign($campaignId) as $r) {
+            if (($r['status'] ?? '') === 'Failed' && !empty($r['error'])) {
+                return (string) $r['error'];
+            }
+        }
+
+        return null;
+    }
+
+    public function fields(Request $request, Response $response): Response
+    {
+        return $this->jsonResponse($response, ['fields' => Sms::availableFields()]);
+    }
+
+    public function replies(Request $request, Response $response): Response
+    {
+        $q = $request->getQueryParams();
+        $page = max(1, (int) ($q['page'] ?? 1));
+        $perPage = min(100, max(5, (int) ($q['perPage'] ?? 25)));
+        $result = $this->repo->inbound($page, $perPage, mb_substr(trim((string) ($q['q'] ?? '')), 0, 100));
+
+        return $this->jsonResponse($response, $result + ['page' => $page, 'perPage' => $perPage]);
+    }
+
+    // --------------------------------------------------------------- webhook --
+
+    /**
+     * Webhook de Gupshup (suscripción v3, formato Meta). Público: lo protege la
+     * cabecera X-Gupshup-Webhook-Secret, que se fija al crear la suscripción.
+     * Siempre responde 200 ante un payload válido para que Gupshup no reintente
+     * sin fin; los errores se registran en el log.
+     */
+    public function webhook(Request $request, Response $response): Response
+    {
+        $expected = trim((string) ($_ENV['WHATSAPP_WEBHOOK_SECRET'] ?? ''));
+        $given = $request->getHeaderLine('X-Gupshup-Webhook-Secret');
+        if (strlen($expected) < 16 || !hash_equals($expected, $given)) {
+            Logger::app()->warning('Webhook de WhatsApp rechazado: secreto inválido', [
+                'ip' => $request->getServerParams()['REMOTE_ADDR'] ?? null,
+            ]);
+
+            return $this->jsonResponse($response, ['error' => 'Not found'], 404);
+        }
+
+        $payload = $request->getParsedBody();
+        if (!is_array($payload)) {
+            $payload = json_decode((string) $request->getBody(), true);
+        }
+        if (!is_array($payload)) {
+            return $this->jsonResponse($response, ['error' => 'Payload inválido'], 400);
+        }
+
+        try {
+            foreach ((array) ($payload['entry'] ?? []) as $entry) {
+                foreach ((array) ($entry['changes'] ?? []) as $change) {
+                    $field = (string) ($change['field'] ?? '');
+                    $value = (array) ($change['value'] ?? []);
+                    if ($field === 'message_template_status_update') {
+                        $this->onTemplateStatus($value);
+                        continue;
+                    }
+                    foreach ((array) ($value['statuses'] ?? []) as $st) {
+                        $this->onStatus((array) $st);
+                    }
+                    $names = [];
+                    foreach ((array) ($value['contacts'] ?? []) as $c) {
+                        $names[(string) ($c['wa_id'] ?? '')] = (string) ($c['profile']['name'] ?? '');
+                    }
+                    foreach ((array) ($value['messages'] ?? []) as $msg) {
+                        $this->onInbound((array) $msg, $names);
+                    }
+                }
+            }
+        } catch (\Throwable $e) {
+            Logger::app()->error('Error procesando el webhook de WhatsApp', ['error' => $e->getMessage()]);
+        }
+
+        return $this->jsonResponse($response, ['status' => 'ok']);
+    }
+
+    private function onStatus(array $st): void
+    {
+        $status = strtolower((string) ($st['status'] ?? ''));
+        if ($status === '' || $status === 'set-callback') {
+            return;
+        }
+        $r = $this->repo->recipientByExternalId([(string) ($st['gs_id'] ?? ''), (string) ($st['id'] ?? '')]);
+        if ($r === null || ($r['channel'] ?? '') !== 'whatsapp') {
+            return;
+        }
+
+        $recipientId = (int) $r['id'];
+        $campaignId = (int) $r['campaign_id'];
+        $this->repo->setDeliveryStatus($recipientId, $status);
+
+        // Fallo asíncrono (número sin WhatsApp, plantilla pausada, límite...):
+        // no se entregó, así que se marca fallido y se devuelve el cobro.
+        if ($status === 'failed' && ($r['status'] ?? '') === 'Sent') {
+            $reason = trim((string) ($st['reason'] ?? $st['errors'][0]['title'] ?? $st['errors'][0]['message'] ?? ''));
+            $code = (string) ($st['code'] ?? $st['errors'][0]['code'] ?? '');
+            $msg = 'WhatsApp no entregó el mensaje' . ($reason !== '' ? ': ' . $reason : '') . ($code !== '' ? " (código $code)" : '');
+            (new CampaignRecipientRepository())->markFailed($recipientId, mb_substr($msg, 0, 500));
+
+            $template = $this->repo->findTemplate((int) ($r['wa_template_id'] ?? 0));
+            try {
+                (new CreditService())->refund(
+                    CreditService::priceKey('whatsapp', $template['category'] ?? null),
+                    $campaignId,
+                    (string) $r['phone'],
+                    'WhatsApp no entregado'
+                );
+            } catch (\Throwable $e) {
+                Logger::app()->error('No se pudo reembolsar un WhatsApp fallido', ['campaignId' => $campaignId, 'error' => $e->getMessage()]);
+            }
+            (new CampaignRepository())->refreshCounts($campaignId);
+        }
+    }
+
+    private function onInbound(array $msg, array $names): void
+    {
+        $from = WhatsAppService::normalizePhone((string) ($msg['from'] ?? ''));
+        if (strlen($from) < 7) {
+            return;
+        }
+        $type = (string) ($msg['type'] ?? 'text');
+        $text = match ($type) {
+            'text'        => (string) ($msg['text']['body'] ?? ''),
+            'button'      => (string) ($msg['button']['text'] ?? ''),
+            'interactive' => (string) ($msg['interactive']['button_reply']['title'] ?? $msg['interactive']['list_reply']['title'] ?? ''),
+            'image', 'video', 'document', 'audio', 'sticker' => '[' . $type . ']' . (isset($msg[$type]['caption']) ? ' ' . $msg[$type]['caption'] : ''),
+            'location'    => '[ubicación] ' . ($msg['location']['latitude'] ?? '') . ',' . ($msg['location']['longitude'] ?? ''),
+            default       => '[' . $type . ']',
+        };
+        $text = mb_substr(trim($text), 0, 4000);
+        if ($text === '') {
+            return;
+        }
+
+        $match = $this->repo->matchRecipient($from);
+        $optOut = in_array(mb_strtolower(trim($text, " \t\n\r.!¡¿?")), self::OPT_OUT_WORDS, true);
+
+        $isNew = $this->repo->saveInbound([
+            'wa_message_id' => isset($msg['id']) ? mb_substr((string) $msg['id'], 0, 128) : null,
+            'phone'         => $from,
+            'profile_name'  => $names[(string) ($msg['from'] ?? '')] ?? null,
+            'message_type'  => mb_substr($type, 0, 20),
+            'message'       => $text,
+            'campaign_id'   => $match['campaign_id'] ?? null,
+            'contact_id'    => $match['contact_id'] ?? null,
+            'is_optout'     => $optOut,
+        ]);
+
+        if ($isNew && $optOut) {
+            $n = $this->repo->unsubscribeByPhone($from);
+            Logger::audit()->info('Baja por respuesta de WhatsApp', ['phone' => $from, 'contactos' => $n]);
+        }
+    }
+
+    private function onTemplateStatus(array $v): void
+    {
+        $event = strtoupper((string) ($v['event'] ?? ''));
+        $key = (string) ($v['message_template_id'] ?? $v['message_template_name'] ?? '');
+        if ($event === '' || $key === '') {
+            return;
+        }
+        $n = $this->repo->updateTemplateStatus($key, $event, isset($v['reason']) ? mb_substr((string) $v['reason'], 0, 500) : null);
+        if ($n === 0 && !empty($v['message_template_name'])) {
+            $this->repo->updateTemplateStatus((string) $v['message_template_name'], $event, $v['reason'] ?? null);
+        }
+    }
+
+    private function isAdmin(Request $request): bool
+    {
+        return strtolower((string) ($request->getAttribute('user')['role'] ?? '')) === 'admin';
+    }
+}

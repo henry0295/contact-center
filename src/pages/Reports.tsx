@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   BarChart3, Mail, MessageSquare, CheckCircle2, AlertCircle, Loader2,
   RefreshCw, Ban, TrendingUp, Megaphone, Search, ChevronLeft, ChevronRight,
-  Eye, X, CalendarX, Send, Trash2, Clock, FileText, Phone,
+  Eye, X, CalendarX, Send, Trash2, Clock, FileText, Phone, MessageCircle,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as api from '../services/api';
@@ -34,12 +34,14 @@ const originLabel = (origin: string): string => {
 const channelBadgeClass = (channel: string): string => {
   if (channel === 'email') return 'bg-blue-100 text-blue-800';
   if (channel === 'call') return 'bg-purple-100 text-purple-800';
+  if (channel === 'whatsapp') return 'bg-emerald-100 text-emerald-800';
   return 'bg-green-100 text-green-800';
 };
 
 const ChannelIcon: React.FC<{ channel: string; className?: string }> = ({ channel, className }) => {
   if (channel === 'email') return <Mail className={className} />;
   if (channel === 'call') return <Phone className={className} />;
+  if (channel === 'whatsapp') return <MessageCircle className={className} />;
   return <MessageSquare className={className} />;
 };
 
@@ -460,6 +462,7 @@ const Reports: React.FC = () => {
                   <option value="email">Email</option>
                   <option value="sms">SMS</option>
                   <option value="call">Llamada</option>
+                  <option value="whatsapp">WhatsApp</option>
                 </select>
                 <select value={filters.status} onChange={(e) => { setFilters({ ...filters, status: e.target.value }); setPage(1); }} className={inputClass} aria-label="Estado">
                   <option value="">Todos los estados</option>
@@ -544,6 +547,7 @@ const Reports: React.FC = () => {
                   <option value="email">Email</option>
                   <option value="sms">SMS</option>
                   <option value="call">Llamada</option>
+                  <option value="whatsapp">WhatsApp</option>
                 </select>
                 <select
                   value={campFilters.status}

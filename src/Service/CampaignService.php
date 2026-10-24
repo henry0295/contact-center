@@ -79,6 +79,28 @@ class CampaignService
             return ['sent' => 0, 'failed' => 0, 'skipped' => 0, 'status' => 'Expired'];
         }
 
+        // WhatsApp: plantilla aprobada y valores de sus variables {{1}}..{{n}}.
+        $waTemplate = null;
+        $waParams = ['body' => [], 'header_media' => null];
+        if ($channel === 'whatsapp') {
+            $waTemplate = $this->waRepo()->findTemplate((int) ($campaign['wa_template_id'] ?? 0));
+            if ($waTemplate === null || $waTemplate['status'] !== 'APPROVED') {
+                $this->campaigns->setStatus($id, 'Failed');
+                foreach ($this->recipients->pending($id) as $r) {
+                    $this->recipients->markFailed((int) $r['id'], 'La plantilla de WhatsApp no existe o ya no está aprobada.');
+                }
+                $this->campaigns->refreshCounts($id);
+
+                return ['sent' => 0, 'failed' => 0, 'skipped' => 0, 'status' => 'Failed'];
+            }
+            $decoded = json_decode((string) ($campaign['wa_params_json'] ?? ''), true);
+            if (is_array($decoded)) {
+                $waParams = array_merge($waParams, $decoded);
+            }
+        }
+        // Clave de precio: WhatsApp se cobra según la categoría de la plantilla.
+        $priceKey = CreditService::priceKey($channel, $waTemplate['category'] ?? null);
+
         $this->campaigns->setStatus($id, 'Sending');
 
         if (empty($attachments) && $channel === 'email') {
@@ -136,7 +158,7 @@ class CampaignService
 
             // Cobro por envío, ANTES de enviar (atómico; ver CreditService).
             // Si el envío falla después, se reembolsa.
-            if (!$this->credits()->debit($channel, $id, (string) $target)) {
+            if (!$this->credits()->debit($priceKey, $id, (string) $target)) {
                 $outOfCredit = true;
                 $this->recipients->markFailed((int) $r['id'], self::NO_CREDIT_ERROR);
                 $this->messages->log($channel, (string) $target, $channel === 'email' ? $personalSubject : null, 'Failed', self::NO_CREDIT_ERROR, $id);
@@ -160,6 +182,26 @@ class CampaignService
                     $this->recipients->markDialing((int) $r['id'], $result['callId']);
                     $this->messages->log($channel, $target, null, 'Dialing', null, $id);
                     $sent++;
+                } elseif ($channel === 'whatsapp') {
+                    // Cada valor de variable puede llevar campos {{nombre}}, {{valor}}...
+                    $params = array_map(
+                        fn ($p) => Sms::renderFields((string) $p, $contact ?? [], $vars),
+                        (array) ($waParams['body'] ?? [])
+                    );
+                    $media = is_array($waParams['header_media'] ?? null) ? $waParams['header_media'] : null;
+                    $externalId = $this->whatsapp()->sendTemplate(
+                        (string) $target,
+                        (string) $waTemplate['element_name'],
+                        (string) $waTemplate['language'],
+                        $params,
+                        $media
+                    );
+                    // Aceptado por Gupshup. La entrega (o el fallo) llega luego
+                    // por el webhook; un "failed" allí reembolsa el cobro.
+                    $this->recipients->markSent((int) $r['id']);
+                    $this->waRepo()->setRecipientExternalId((int) $r['id'], $externalId);
+                    $this->messages->log($channel, (string) $target, $waTemplate['element_name'], 'Sent', null, $id);
+                    $sent++;
                 } else {
                     $this->sms->send($target, $personalBody, $senderId, $campaign['sms_type'] ?? null);
                     $this->recipients->markSent((int) $r['id']);
@@ -169,7 +211,7 @@ class CampaignService
             } catch (\Throwable $e) {
                 // No salió: se devuelve lo cobrado.
                 try {
-                    $this->credits()->refund($channel, $id, (string) $target, 'Envío fallido');
+                    $this->credits()->refund($priceKey, $id, (string) $target, 'Envío fallido');
                 } catch (\Throwable $refundError) {
                     \App\Support\Logger::app()->error('No se pudo reembolsar un envío fallido', [
                         'campaignId' => $id,
@@ -263,6 +305,25 @@ class CampaignService
     private function voice(): VoiceCallService
     {
         return $this->voiceCall ??= new VoiceCallService();
+    }
+
+    private ?WhatsAppService $waService = null;
+    private ?\App\Repositories\WhatsAppRepository $waRepository = null;
+
+    private function whatsapp(): WhatsAppService
+    {
+        return $this->waService ??= new WhatsAppService();
+    }
+
+    private function waRepo(): \App\Repositories\WhatsAppRepository
+    {
+        return $this->waRepository ??= new \App\Repositories\WhatsAppRepository();
+    }
+
+    /** Para pruebas: inyectar el cliente de WhatsApp. */
+    public function setWhatsApp(WhatsAppService $service): void
+    {
+        $this->waService = $service;
     }
 
     private function credits(): CreditService
