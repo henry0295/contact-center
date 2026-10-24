@@ -6,7 +6,6 @@ use App\Database\Connection;
 use App\Repositories\CampaignRepository;
 use App\Repositories\MessageRepository;
 use App\Service\CreditService;
-use App\Service\SmsService;
 use App\Service\WhatsAppService;
 use PDO;
 use Psr\Http\Message\ResponseInterface as Response;
@@ -271,14 +270,10 @@ class DashboardController
                 ? ['status' => 'ok', 'message' => "Dominio verificado ({$domains}) y remitente listo."]
                 : ['status' => 'warning', 'message' => $domains === 0 ? 'No hay un dominio verificado (ver Verificación).' : 'No hay un remitente verificado.']);
 
-        // SMS
-        if (SmsService::provider() === 'itcloud') {
-            $sms = $env('ITCLOUD_SMS_EMAIL') !== '' && $env('ITCLOUD_SMS_TOKEN') !== ''
-                ? ['status' => 'ok', 'message' => 'Proveedor de SMS configurado.']
-                : ['status' => 'off', 'message' => 'Proveedor de SMS sin configurar.'];
-        } else {
-            $sms = $aws ? ['status' => 'ok', 'message' => 'SMS por Amazon SNS.'] : ['status' => 'off', 'message' => 'SMS sin configurar.'];
-        }
+        // SMS (IT Cloud)
+        $sms = $env('ITCLOUD_SMS_EMAIL') !== '' && $env('ITCLOUD_SMS_TOKEN') !== ''
+            ? ['status' => 'ok', 'message' => 'Proveedor de SMS configurado.']
+            : ['status' => 'off', 'message' => 'Proveedor de SMS sin configurar.'];
 
         // Voz
         $voice = $env('VOICE_API_URL') !== '' && $env('VOICE_API_KEY') !== ''

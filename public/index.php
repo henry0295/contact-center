@@ -45,11 +45,6 @@ $app->post('/api/auth/login', 'App\Controllers\AuthController:login');
 // caducó. Su seguridad descansa en el refresh token, que se rota en cada uso.
 $app->post('/api/auth/refresh', 'App\Controllers\AuthController:refresh');
 
-// Webhook de Amazon SNS para rebotes y quejas de SES. Es público porque lo
-// llama AWS, no un usuario: su autenticidad se comprueba validando la firma
-// criptográfica del mensaje dentro del controlador.
-$app->post('/api/webhooks/ses', 'App\Controllers\WebhookController:ses');
-
 // Página de baja: la abre el destinatario desde el correo o el SMS, así que no
 // puede exigir sesión. Se protege con el token aleatorio de cada contacto.
 $app->get('/unsubscribe/{token}', 'App\Controllers\UnsubscribeController:unsubscribe');

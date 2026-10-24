@@ -99,12 +99,11 @@ if (!isset($opts['no-check'])) {
     }
 }
 
-if ($fromEnvFile && $env->get('SMS_PROVIDER') === 'itcloud') {
+if ($fromEnvFile) {
     out('Proveedor de SMS ya configurado; no se cambia nada.');
     exit(0);
 }
 
-$env->set('SMS_PROVIDER', 'itcloud');
 $env->set('ITCLOUD_SMS_EMAIL', $email);
 $env->set('ITCLOUD_SMS_TOKEN', $token);
 if ($env->get('ITCLOUD_SMS_TYPE') === null || $env->get('ITCLOUD_SMS_TYPE') === '') {

@@ -665,7 +665,7 @@ class WhatsAppController
         } catch (\InvalidArgumentException $e) {
             return $this->jsonResponse($response, ['error' => $e->getMessage()], $e instanceof InsufficientCreditException ? 402 : 400);
         } catch (\Throwable $e) {
-            return $this->jsonResponse($response, ['error' => 'No se pudo registrar el envío', 'message' => $e->getMessage()], 500);
+            return $this->internalError($response, 'No se pudo registrar el envío', $e);
         }
 
         $allFailed = $result['mode'] === 'sent' && (int) ($result['result']['sent'] ?? 0) === 0;

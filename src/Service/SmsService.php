@@ -2,23 +2,17 @@
 
 namespace App\Service;
 
-use App\Support\Aws;
 use App\Support\Logger;
-use Aws\Sns\SnsClient;
 use GuzzleHttp\Client;
 
 /**
- * Envío de SMS. Dos proveedores, según SMS_PROVIDER del .env:
+ * Envío de SMS por IT Cloud Services (contacto-virtual.com).
  *
- *   itcloud (por defecto): IT Cloud Services / contacto-virtual.com.
- *       POST JSON {token, email, type_send, data:[{cellphone, message}]}
- *       Responde por número {celular, id_sms}: id_sms > 0 = aceptado,
- *       negativo = código de error (ver ITCLOUD_ERRORS). Cada instalación
- *       usa SU email y token (los pide deploy.sh / bin/sms-setup.php), y el
- *       proveedor debe tener registrada en su firewall la IP pública del
- *       servidor.
- *
- *   sns: Amazon SNS (comportamiento anterior).
+ *   POST JSON {token, email, type_send, data:[{cellphone, message}]}
+ *   Responde por número {celular, id_sms}: id_sms > 0 = aceptado, negativo =
+ *   código de error (ver ITCLOUD_ERRORS). Cada instalación usa SU email y
+ *   token (los pide deploy.sh / bin/sms-setup.php), y el proveedor debe tener
+ *   registrada en su firewall la IP pública del servidor.
  */
 class SmsService
 {
@@ -42,28 +36,21 @@ class SmsService
         -11 => 'Tipo de envío inválido (1via, 2via o flash).',
     ];
 
-    private ?SnsClient $sns;
     private ?Client $http;
 
-    public function __construct(?SnsClient $sns = null, ?Client $http = null)
+    public function __construct(?Client $http = null)
     {
-        $this->sns = $sns;
         $this->http = $http;
     }
 
+    /** Proveedor único (se mantiene por compatibilidad con quien lo consulta). */
     public static function provider(): string
     {
-        $p = strtolower(trim((string) ($_ENV['SMS_PROVIDER'] ?? 'itcloud')));
-
-        return $p === 'sns' ? 'sns' : 'itcloud';
+        return 'itcloud';
     }
 
     public function isConfigured(): bool
     {
-        if (self::provider() === 'sns') {
-            return true;
-        }
-
         return trim((string) ($_ENV['ITCLOUD_SMS_EMAIL'] ?? '')) !== ''
             && trim((string) ($_ENV['ITCLOUD_SMS_TOKEN'] ?? '')) !== '';
     }
@@ -86,17 +73,11 @@ class SmsService
     }
 
     /**
-     * @param string|null $senderId Remitente alfanumérico. Solo lo usa SNS;
-     *   IT Cloud envía con el remitente de la cuenta.
+     * @param string|null $senderId Ignorado: IT Cloud envía con el remitente
+     *   de la cuenta (se conserva el parámetro por compatibilidad).
      */
     public function send(string $phone, string $message, ?string $senderId = null, ?string $type = null): void
     {
-        if (self::provider() === 'sns') {
-            $this->sendSns($phone, $message, $senderId);
-
-            return;
-        }
-
         $this->sendItCloud($phone, $message, $type);
     }
 
@@ -170,39 +151,6 @@ class SmsService
         }
 
         Logger::mail()->info('SMS enviado', ['to' => $cellphone, 'provider' => 'itcloud', 'id_sms' => $id]);
-    }
-
-    private function sendSns(string $phone, string $message, ?string $senderId): void
-    {
-        $attributes = [
-            // Transactional da prioridad de entrega y mejor fiabilidad.
-            'AWS.SNS.SMS.SMSType' => ['DataType' => 'String', 'StringValue' => 'Transactional'],
-        ];
-
-        $senderId = $senderId === null ? '' : trim($senderId);
-        if ($senderId !== '') {
-            $attributes['AWS.SNS.SMS.SenderID'] = ['DataType' => 'String', 'StringValue' => $senderId];
-        }
-
-        try {
-            $this->sns ??= new SnsClient(Aws::clientConfig());
-            $result = $this->sns->publish([
-                'PhoneNumber'       => $phone,
-                'Message'           => $message,
-                'MessageAttributes' => $attributes,
-            ]);
-
-            Logger::mail()->info('SMS enviado', [
-                'to'        => $phone,
-                'provider'  => 'sns',
-                'sender'    => $senderId !== '' ? $senderId : null,
-                'messageId' => $result['MessageId'] ?? null,
-            ]);
-        } catch (\Throwable $e) {
-            Logger::mail()->error('Fallo al enviar SMS', ['to' => $phone, 'error' => $e->getMessage()]);
-
-            throw $e;
-        }
     }
 
     private function http(): Client

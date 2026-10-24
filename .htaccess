@@ -1,0 +1,11 @@
+# Solo para Apache (p.ej. XAMPP en desarrollo, si el proyecto queda dentro de
+# htdocs). Bloquea TODO lo que esté fuera de public/: .env (credenciales),
+# storage/ (logs y copias), .git, vendor, bin, database... En producción Nginx
+# sirve solo dist/ y public/, así que este archivo no interviene.
+<IfModule mod_authz_core.c>
+    Require all denied
+</IfModule>
+<IfModule !mod_authz_core.c>
+    Order deny,allow
+    Deny from all
+</IfModule>

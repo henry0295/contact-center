@@ -6,7 +6,7 @@ Sistema integral para gestión de comunicaciones a través de múltiples canales
 
 - Sistema de autenticación y autorización
 - Módulo de Email (AWS SES)
-- Módulo de SMS (AWS SNS)
+- Módulo de SMS (IT Cloud Services)
 - Módulo de Audio/Voz (Asterisk)
 - Gestión de campañas multicanal
 - Reportes y analíticas
@@ -32,7 +32,6 @@ Sistema integral para gestión de comunicaciones a través de múltiples canales
 - Cuenta AWS activa
 - Credenciales AWS con permisos para:
   - SES (Email)
-  - SNS (SMS)
   - Lambda
   - S3
 

@@ -924,6 +924,7 @@ seed_admin_if_missing() {
     ADMIN_SEEDED=1
   else
     ok "Ya existe un administrador; no se modifica su contraseña"
+    clear_initial_admin_password
   fi
 }
 
@@ -937,6 +938,29 @@ build_frontend() {
   bad="$(grep -rhoE 'https?://[a-zA-Z0-9.:-]+/api' "$APP_DIR/dist/assets/" 2>/dev/null | sort -u || true)"
   [[ -z "$bad" ]] || die "El bundle contiene una URL absoluta de API ($bad). Revisa VITE_API_URL."
   ok "Bundle correcto: el login llama a /api del mismo origen"
+}
+
+# La contraseña inicial del admin queda en claro en el .env. En cuanto el
+# admin la cambia desde la aplicación ya no sirve para nada: se borra del .env
+# para que no quede expuesta (copias, phpMyAdmin, soporte...).
+clear_initial_admin_password() {
+  local still
+  grep -qE '^ADMIN_PASSWORD=.+' "$APP_DIR/.env" || return 0
+  still="$(cd "$APP_DIR" && runuser -u "$WEB_USER" -- "$PHP_BIN" -r '
+    require "vendor/autoload.php";
+    Dotenv\Dotenv::createImmutable(".")->load();
+    $pdo = App\Database\Connection::get();
+    $s = $pdo->prepare("SELECT password_hash FROM users WHERE email = ? LIMIT 1");
+    $s->execute([$_ENV["ADMIN_EMAIL"] ?? ""]);
+    $h = $s->fetchColumn();
+    echo ($h !== false && password_verify((string) ($_ENV["ADMIN_PASSWORD"] ?? ""), (string) $h)) ? "yes" : "no";
+  ' 2>/dev/null || echo unknown)"
+  if [[ "$still" == no ]]; then
+    set_env ADMIN_PASSWORD ""
+    ok "ADMIN_PASSWORD vaciado del .env (el admin ya cambió su contraseña)"
+  elif [[ "$still" == yes ]]; then
+    warn "El admin sigue con la contraseña inicial del .env: cámbiala desde la aplicación (Mi cuenta)."
+  fi
 }
 
 # ------------------------------------------------------------------ Nginx ----
@@ -1517,6 +1541,7 @@ else
   fix_perms
   log "Aplicando esquema (idempotente)"
   mysql < "$APP_DIR/database/schema.sql"
+  clear_initial_admin_password
   build_frontend
   fix_perms
   # Se regenera la configuración de Nginx para aplicar las cabeceras de

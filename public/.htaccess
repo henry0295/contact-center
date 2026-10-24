@@ -1,3 +1,15 @@
+# public/ es lo único accesible (el .htaccess de la raíz bloquea el resto).
+<IfModule mod_authz_core.c>
+    Require all granted
+</IfModule>
+
+# Nunca servir archivos ocultos (.htaccess, .env copiados por error...).
+<FilesMatch "^\.">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+</FilesMatch>
+
 <IfModule mod_rewrite.c>
     RewriteEngine On
     RewriteCond %{REQUEST_FILENAME} !-f

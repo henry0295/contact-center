@@ -73,10 +73,7 @@ class CallController
             // 402 = saldo insuficiente (InsufficientCreditException).
             return $this->jsonResponse($response, ['error' => $e->getMessage()], $e instanceof \App\Service\InsufficientCreditException ? 402 : 400);
         } catch (\Throwable $e) {
-            return $this->jsonResponse($response, [
-                'error'   => 'No se pudo registrar la campaña de llamadas',
-                'message' => $e->getMessage(),
-            ], 500);
+            return $this->internalError($response, 'No se pudo registrar la campaña de llamadas', $e);
         }
 
         // Las llamadas no resuelven su resultado en la misma petición (quedan
@@ -115,10 +112,7 @@ class CallController
             // 402 = saldo insuficiente (InsufficientCreditException).
             return $this->jsonResponse($response, ['error' => $e->getMessage()], $e instanceof \App\Service\InsufficientCreditException ? 402 : 400);
         } catch (\Throwable $e) {
-            return $this->jsonResponse($response, [
-                'error'   => 'No se pudo originar la llamada de prueba',
-                'message' => $e->getMessage(),
-            ], 500);
+            return $this->internalError($response, 'No se pudo originar la llamada de prueba', $e);
         }
 
         $originated = ($result['result']['sent'] ?? 0) > 0;

@@ -117,11 +117,14 @@ class EmailController
             return $this->jsonResponse($response, ['error' => $e->getMessage()], 400);
         } catch (\Throwable $e) {
             Attachments::cleanup($attachments);
+            $friendly = $this->friendlyError($e);
+            // Los errores conocidos de SES se explican; el resto (BD, código) no
+            // se muestra al usuario, solo se registra.
+            if ($friendly !== $e->getMessage()) {
+                return $this->jsonResponse($response, ['error' => 'No se pudo registrar el envío', 'message' => $friendly], 500);
+            }
 
-            return $this->jsonResponse($response, [
-                'error'   => 'No se pudo registrar el envío',
-                'message' => $this->friendlyError($e),
-            ], 500);
+            return $this->internalError($response, 'No se pudo registrar el envío', $e);
         }
 
         // Los adjuntos que se movieron a la carpeta de la campaña ya no están en

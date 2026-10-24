@@ -146,7 +146,7 @@ memory_limit = 256M
 upload_max_filesize = 8M
 post_max_size = 20M
 max_file_uploads = 20
-; El webhook de SNS confirma la suscripción y valida la firma con file_get_contents()
+; Necesario para las llamadas salientes de la aplicación (APIs de proveedores)
 allow_url_fopen = On
 opcache.enable = 1
 opcache.memory_consumption = 128
@@ -200,7 +200,7 @@ APP=/var/www/contact-center
 sudo semanage fcontext -a -t httpd_sys_content_t    "$APP(/.*)?"
 sudo semanage fcontext -a -t httpd_sys_rw_content_t "$APP/storage(/.*)?"
 sudo semanage fcontext -a -t httpd_sys_rw_content_t "$APP/public/uploads(/.*)?"
-# PHP-FPM necesita conexiones salientes: AWS SES/SNS, certificados de firma de SNS y la API de voz (puerto 8000).
+# PHP-FPM necesita conexiones salientes: AWS SES, Gupshup, IT Cloud y la API de voz (puerto 8000).
 sudo setsebool -P httpd_can_network_connect on
 ```
 
@@ -294,8 +294,8 @@ vi .env          # resto de variables (o nano: sudo dnf install -y nano)
 | `DB_DATABASE` | Nombre de la BD (fijo en `schema.sql`) | `contact_center` (no cambiar) |
 | `DB_USERNAME` | Usuario de la app (`setup-db-user` rechaza `root`) | `cc_app` |
 | `DB_PASSWORD` | Contraseña del usuario de la app | generada por `composer secrets` |
-| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | Credenciales IAM para SES y SNS | las del usuario IAM de §13.1 |
-| `AWS_REGION` | Región de SES/SNS | la de tus identidades SES, p.ej. `us-east-1` |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | Credenciales IAM para SES | las del usuario IAM de §13.1 |
+| `AWS_REGION` | Región de SES | la de tus identidades SES, p.ej. `us-east-1` |
 | `AWS_SESSION_TOKEN` | Solo credenciales temporales STS (`ASIA...`) | vacío |
 | `MAIL_FROM` | Remitente de respaldo si no hay remitente por defecto en la app | vacío o una identidad verificada |
 | `MAIL_FROM_NAME` | Nombre visible del remitente | `"Contact Center"` |
@@ -309,9 +309,8 @@ vi .env          # resto de variables (o nano: sudo dnf install -y nano)
 | `JWT_REFRESH_EXPIRY` | Validez del refresh token (s) | `1209600` |
 | `ADMIN_NAME` / `ADMIN_EMAIL` | Admin inicial (`seed-admin`) | tu nombre / tu correo |
 | `ADMIN_PASSWORD` | Contraseña del admin inicial | generada por `composer secrets` |
-| `SNS_VERIFY_SIGNATURE` | Valida la firma de SNS en el webhook | `true` (siempre) |
 | `TRUST_PROXY` | Leer la IP de `X-Forwarded-For` (límite de login) | `false` con Nginx en el mismo servidor |
-| `SMS_PRICE_PER_SEGMENT` | Precio estimado por segmento SMS; `0` lo oculta | según tarifa SNS |
+| `SMS_PRICE_PER_SEGMENT` | Precio estimado por segmento SMS; `0` lo oculta | según tarifa del proveedor |
 | `SMS_PRICE_CURRENCY` | Moneda del estimado | `USD` |
 | `VOICE_API_URL` | Base de la API de voz | `http://192.168.101.92:8000` |
 | `VOICE_API_KEY` | Cabecera `X-API-Key` hacia la API de voz | la que entregue el administrador de esa API |
@@ -571,7 +570,7 @@ Si el servidor se usa por IP privada (p.ej. `http://192.168.101.95`), certbot no
 3. **Firewall (§10):** basta `--add-service=http`.
 4. **Omite §11** (certbot y HSTS).
 5. **Verificación (§15):** usa `http://192.168.101.95/...` en lugar de `https://<TU_DOMINIO>/...`; el `301` a HTTPS no aplica.
-6. El webhook de SNS (§13.3) y los enlaces de baja/imágenes de los correos necesitan una URL accesible desde Internet; por IP privada no funcionan fuera de la LAN.
+6. Los enlaces de baja/imágenes de los correos necesitan una URL accesible desde Internet; por IP privada no funcionan fuera de la LAN.
 
 **Aviso de Firefox "Campos de contraseña presentes en una página insegura (http://)":** es esperado al servir el login por HTTP; no impide entrar. La contraseña viaja sin cifrar por la red, así que **[Recomendación]** usa HTTPS también en la LAN, con un certificado de tu CA interna o uno autofirmado (el navegador pedirá aceptarlo una vez):
 
@@ -734,7 +733,7 @@ sudo mysql -e "SELECT COUNT(*) FROM cc_restore_test.users; DROP DATABASE cc_rest
 
 ---
 
-## 13. AWS (SES y SNS)
+## 13. AWS (SES)
 
 ### 13.1 Usuario IAM con permisos mínimos
 
@@ -754,8 +753,7 @@ Acciones que el código usa realmente:
         "ses:GetIdentityVerificationAttributes",
         "ses:GetIdentityDkimAttributes",
         "ses:ListIdentities",
-        "ses:DeleteIdentity",
-        "sns:Publish"
+        "ses:DeleteIdentity"
       ],
       "Resource": "*"
     }
@@ -771,16 +769,9 @@ Crea claves permanentes (`AKIA...`) y ponlas en `AWS_ACCESS_KEY_ID` / `AWS_SECRE
 2. Crea el remitente (y el de respuesta/Reply-To si lo usas) sobre el dominio verificado y márcalo como predeterminado; tiene prioridad sobre `MAIL_FROM`.
 3. **Salir del sandbox:** consola SES (región de `AWS_REGION`) → *Account dashboard* → *Request production access*.
 
-### 13.3 Rebotes y quejas (webhook)
+### 13.3 Rebotes y quejas
 
-1. SNS → tema estándar (p.ej. `ses-eventos`) en la misma región.
-2. Suscripción **HTTPS** a `https://<TU_DOMINIO>/api/webhooks/ses`, **sin** *raw message delivery*.
-3. La app confirma la suscripción sola (solo visita `SubscribeURL` de `amazonaws.com`). Comprueba *Confirmed* en SNS y "Suscripción SNS confirmada" en `storage/logs/app-*.log`.
-4. SES → *Identities* → tu identidad → *Notifications* → asigna el tema a **Bounce** y **Complaint**.
-
-### 13.4 SMS (SNS)
-
-Consola SNS → *Text messaging (SMS)*: sal del sandbox de SMS, fija el límite de gasto mensual y, según el país, un sender ID o número de origen. Destinos en E.164 (`+57...`).
+La aplicación ya no usa Amazon SNS: los rebotes y quejas de SES no llegan solos a la lista de supresión. Vigila la tasa de rebotes (menos del 5 %) y de quejas (menos del 0,1 %) en la consola de SES (*Reputation metrics*); si suben, AWS puede pausar el envío de la cuenta.
 
 ---
 
@@ -830,7 +821,6 @@ sudo SMS_EMAIL='cliente@empresa.com' SMS_TOKEN='<token>' /var/www/contact-center
 - El campo "Remitente" se oculta en el módulo SMS: este proveedor envía con el remitente de la cuenta.
 - **SMS doble vía:** en el compositor, "Permitir respuestas" envía con `type_send=2via`. Las respuestas llegan a `https://<host>/api/sms/inbound/<SMS_INBOUND_SECRET>` (`deploy.sh` genera el secreto y muestra la URL completa al final): **informa esa URL al proveedor**. Se ven en SMS → Respuestas, asociadas a la campaña; quien responde SALIR/STOP/BAJA queda dado de baja. La URL debe ser accesible desde Internet (con una IP privada no llegan respuestas). Si el secreto se filtra, bórralo del `.env`, ejecuta `deploy.sh update` y envía la URL nueva al proveedor.
 - Las cuentas con perfil administrador no admiten la consulta de saldo: `deploy.sh` ofrece guardarlas sin validar.
-- Para volver a Amazon SNS: `SMS_PROVIDER=sns` en el `.env` y `sudo systemctl reload php-fpm`.
 
 ### 14.0.1 phpMyAdmin
 
@@ -906,7 +896,6 @@ En **Verificación → Email de respuesta** se pueden agregar varias direcciones
 - [ ] Llamadas: `/api/calls/capabilities` → `configured: true`; llamada de prueba a tu número y resultado en ~1 min.
 - [ ] Dispatcher: `systemctl list-timers | grep contact-center` y `journalctl -u contact-center-dispatch.service -n 5`. Programa una campaña a +2 min y comprueba que sale a su hora.
 - [ ] Hay un `.sql.gz` en `/var/lib/contact-center/backups` y la restauración de prueba funciona.
-- [ ] Suscripción SNS *Confirmed*.
 
 Logs:
 

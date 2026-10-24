@@ -889,9 +889,9 @@ const Reports: React.FC = () => {
             <div className="space-y-4">
               <div className="rounded-md border-l-4 border-amber-400 bg-amber-50 p-4">
                 <p className="text-sm text-amber-700">
-                  Estas direcciones rebotaron de forma permanente o marcaron el correo como spam.
-                  La aplicación bloquea los envíos a ellas para proteger la reputación de la cuenta
-                  en AWS. Libéralas solo si sabes que el problema está resuelto.
+                  Estas direcciones pidieron la baja o quedaron bloqueadas para envíos de email.
+                  La aplicación no les envía para proteger la reputación de la cuenta de envío.
+                  Libéralas solo si la persona volvió a autorizar los correos.
                 </p>
               </div>
 

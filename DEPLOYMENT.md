@@ -1,6 +1,6 @@
 # Despliegue — Contact Center
 
-Plataforma de centro de contacto: autenticación (JWT) con gestión de usuarios, verificación de identidades en Amazon SES, envío de email (SES) y SMS (SNS) individual y masivo, contactos/listas, plantillas y campañas (enviar ahora o programadas).
+Plataforma de centro de contacto: autenticación (JWT) con gestión de usuarios, verificación de identidades en Amazon SES, envío de email (SES) y SMS (IT Cloud Services) individual y masivo, contactos/listas, plantillas y campañas (enviar ahora o programadas).
 
 Esta guía describe cómo instalar y servir la aplicación en el mismo equipo con XAMPP (Windows). No contempla despliegue a servidores remotos ni operaciones de git. Ningún archivo del proyecto contiene secretos reales: las claves AWS y los secretos quedan vacíos y el usuario los completa en su entorno.
 
@@ -25,7 +25,7 @@ npm install
 Puedes partir de `.env.example`, que ya incluye todas las claves necesarias. Completa los valores reales:
 
 - `DB_HOST`, `DB_DATABASE`, `DB_USERNAME`, `DB_PASSWORD`: conexión a MySQL/MariaDB.
-- `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`: credenciales de AWS (SES para email, SNS para SMS).
+- `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`: credenciales de AWS (SES para email).
 - `AWS_SESSION_TOKEN`: solo si usas credenciales temporales de STS (claves que empiezan por `ASIA...`). Déjalo vacío con claves permanentes (`AKIA...`).
 - `MAIL_FROM`: remitente de respaldo. **Lo habitual es no usarlo**: el remitente se crea desde el módulo de Verificación sobre un dominio ya verificado y queda marcado como "remitente por defecto" en la base de datos, que tiene prioridad sobre esta variable. `MAIL_FROM` solo se aplica si no hay ningún remitente por defecto. En cualquier caso debe ser una identidad verificada en SES.
 - `JWT_SECRET`: secreto para firmar los tokens de sesión. Genera uno largo y aleatorio en producción (p.ej. `openssl rand -hex 32`). `JWT_EXPIRY`: validez del token en segundos (por defecto 86400 = 1 día).
@@ -125,7 +125,7 @@ En un entorno de producción real sirve la aplicación por HTTPS: configura un V
 
 Una cuenta SES nueva está en **sandbox**: solo permite enviar a identidades verificadas y requiere salir del sandbox mediante una solicitud a soporte de AWS. La verificación de dominios y remitentes funciona en sandbox, pero el envío real a terceros requiere solicitar el acceso de producción en SES.
 
-Para **SMS por Amazon SNS**, además de las credenciales puede ser necesario configurar en AWS: salir del sandbox de SMS, un gasto máximo mensual (spending limit) y, según el país, un número de origen (origination number) o sender ID. Los números de destino deben ir en formato E.164 (p.ej. `+521234567890`).
+Los **SMS** salen por IT Cloud Services con la cuenta de cada cliente (ver `bin/sms-setup.php`).
 
 ## 8a. Adjuntos e imágenes del editor
 
@@ -254,7 +254,6 @@ El usuario IAM necesita exactamente estas acciones:
 | `ses:GetIdentityVerificationAttributes`, `ses:GetIdentityDkimAttributes` | Consulta de estado |
 | `ses:ListIdentities`, `ses:DeleteIdentity` | Listado y borrado de identidades |
 | `ses:GetSendQuota` | Detección del modo sandbox |
-| `sns:Publish` | Envío de SMS |
 | `polly:SynthesizeSpeech` | Módulo de Audio (locuciones) |
 
 Si falta `polly:SynthesizeSpeech`, el módulo de Audio responde con un mensaje
@@ -342,20 +341,11 @@ se omite en lugar de enviar los correos dos veces.
 ## 8. Rebotes y quejas (reputación de envío)
 
 AWS vigila la tasa de rebotes y quejas: si sigues enviando a direcciones que
-rebotan, acaba **suspendiendo** el envío. Configúralo así:
+rebotan, acaba **suspendiendo** el envío. La aplicación ya no usa Amazon SNS,
+así que los rebotes no se registran solos: revisa las métricas de reputación
+en la consola de SES (rebotes < 5 %, quejas < 0,1 %).
 
-1. En SNS, crea un tema (por ejemplo `ses-eventos`).
-2. Suscríbelo por HTTPS a `https://TU_DOMINIO/api/webhooks/ses`.
-3. En SES → la identidad → *Notifications*, asigna ese tema a **Bounces** y
-   **Complaints**.
-
-La aplicación confirma la suscripción automáticamente y, a partir de ahí:
-
-- Un rebote **permanente** o una **queja** añaden la dirección a la lista de
-  supresión, y los envíos futuros a ella se bloquean antes de llamar a SES.
-- Un rebote **transitorio** (buzón lleno) no suprime nada: puede resolverse solo.
-
-Las direcciones suprimidas se consultan y liberan en **Reportes → Supresiones**.
+Las bajas de los destinatarios se consultan y liberan en **Reportes → Supresiones**.
 
 > `SNS_VERIFY_SIGNATURE` debe quedarse en `true`. La ruta es pública porque la
 > llama AWS, y la firma criptográfica es lo único que impide que cualquiera
@@ -385,7 +375,6 @@ copia restaura de verdad**: una copia sin probar no es una copia.
 - [ ] `npm run build` y colocar el `.htaccess` de `dist/`
 - [ ] Dispatcher programado y comprobado en el log
 - [ ] Copia de seguridad programada y una restauración probada
-- [ ] Webhook de rebotes configurado en SNS
 - [ ] Acceso de producción de SES solicitado (salir del sandbox)
 - [ ] Remitente verificado y marcado como predeterminado
 - [ ] Permisos de AWS revisados (incluido `polly:SynthesizeSpeech` si usas Audio)

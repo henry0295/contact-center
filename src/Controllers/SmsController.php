@@ -4,7 +4,6 @@ namespace App\Controllers;
 
 use App\Repositories\CampaignRepository;
 use App\Service\SendOrchestrator;
-use App\Service\SmsService;
 use App\Support\Sms;
 use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
@@ -54,10 +53,7 @@ class SmsController
             // 402 = saldo insuficiente (InsufficientCreditException).
             return $this->jsonResponse($response, ['error' => $e->getMessage()], $e instanceof \App\Service\InsufficientCreditException ? 402 : 400);
         } catch (\Throwable $e) {
-            return $this->jsonResponse($response, [
-                'error'   => 'No se pudo registrar el envío',
-                'message' => $e->getMessage(),
-            ], 500);
+            return $this->internalError($response, 'No se pudo registrar el envío', $e);
         }
 
         // Si el envío fue inmediato y no se entregó ni uno, no es un éxito:
@@ -106,10 +102,7 @@ class SmsController
             // 402 = saldo insuficiente (InsufficientCreditException).
             return $this->jsonResponse($response, ['error' => $e->getMessage()], $e instanceof \App\Service\InsufficientCreditException ? 402 : 400);
         } catch (\Throwable $e) {
-            return $this->jsonResponse($response, [
-                'error'   => 'No se pudo enviar la prueba',
-                'message' => $e->getMessage(),
-            ], 500);
+            return $this->internalError($response, 'No se pudo enviar la prueba', $e);
         }
 
         $sent = ($result['result']['sent'] ?? 0) > 0;
@@ -146,10 +139,9 @@ class SmsController
         return $this->jsonResponse($response, [
             'fields'   => Sms::availableFields(),
             'previous' => $this->campaigns->recentBodies('sms', 10),
-            // El remitente alfanumérico solo lo usa Amazon SNS; IT Cloud envía
-            // con el de la cuenta y ofrece en cambio la doble vía.
-            'senderIdSupported' => SmsService::provider() === 'sns',
-            'twoWaySupported'   => SmsService::provider() === 'itcloud',
+            // IT Cloud envía con el remitente de la cuenta y ofrece doble vía.
+            'senderIdSupported' => false,
+            'twoWaySupported'   => true,
         ]);
     }
 
