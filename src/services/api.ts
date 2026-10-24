@@ -903,6 +903,35 @@ export function sendWhatsAppTest(payload: { to: string; templateId: number; para
   return request('/whatsapp/test', { method: 'POST', body: jsonBody(payload) });
 }
 
+export interface WaProfile {
+  address: string | null;
+  description: string | null;
+  email: string | null;
+  website1: string | null;
+  website2: string | null;
+  vertical: string | null;
+  /** Texto "Info" bajo el nombre (máx. 139). */
+  about: string | null;
+  photoUrl: string | null;
+}
+
+export type WaProfileInput = Partial<Record<Exclude<keyof WaProfile, 'photoUrl'>, string>>;
+
+/** Solo administradores. Requiere el número registrado (app en vivo). */
+export function getWaProfile(): Promise<{ profile: WaProfile; verticals: string[] }> {
+  return request('/whatsapp/profile');
+}
+
+export function updateWaProfile(payload: WaProfileInput): Promise<{ success: boolean; message: string; profile: WaProfile | null }> {
+  return request('/whatsapp/profile', { method: 'POST', body: jsonBody(payload) });
+}
+
+export function uploadWaProfilePhoto(file: File): Promise<{ success: boolean; message: string }> {
+  const form = new FormData();
+  form.append('photo', file);
+  return request('/whatsapp/profile/photo', { method: 'POST', body: form });
+}
+
 export function waFields(): Promise<{ fields: PersonalizationField[] }> {
   return request('/whatsapp/fields');
 }

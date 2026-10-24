@@ -107,6 +107,162 @@ class WhatsAppController
         };
     }
 
+    // ------------------------------------------------------ perfil (admin) --
+
+    private const PHOTO_MAX_BYTES = 5 * 1024 * 1024;
+    private const PHOTO_MIN_PX = 192;
+
+    public function profile(Request $request, Response $response): Response
+    {
+        if (!$this->wa->isConfigured()) {
+            return $this->jsonResponse($response, ['error' => 'La línea de WhatsApp todavía no está activada.'], 409);
+        }
+        try {
+            return $this->jsonResponse($response, [
+                'profile'   => $this->wa->getProfile(),
+                'verticals' => WhatsAppService::VERTICALS,
+            ]);
+        } catch (\Throwable $e) {
+            return $this->profileError($response, $e);
+        }
+    }
+
+    /**
+     * body: {about?, description?, address?, email?, website1?, website2?, vertical?}
+     * Solo se envían a Meta los campos presentes en la petición.
+     */
+    public function updateProfile(Request $request, Response $response): Response
+    {
+        if (!$this->wa->isConfigured()) {
+            return $this->jsonResponse($response, ['error' => 'La línea de WhatsApp todavía no está activada.'], 409);
+        }
+        $d = (array) ($request->getParsedBody() ?? []);
+        $val = static fn (string $k): ?string => array_key_exists($k, $d) ? trim(preg_replace('/[\x00-\x09\x0B-\x1F\x7F]/u', '', (string) $d[$k]) ?? '') : null;
+
+        $about = $val('about');
+        $desc = $val('description');
+        $address = $val('address');
+        $email = $val('email');
+        $web1 = $val('website1');
+        $web2 = $val('website2');
+        $vertical = $val('vertical');
+
+        $error = null;
+        if ($about !== null && ($about === '' || mb_strlen($about) > 139)) {
+            $error = 'La información ("Info") es obligatoria y admite hasta 139 caracteres.';
+        } elseif ($desc !== null && mb_strlen($desc) > 512) {
+            $error = 'La descripción admite hasta 512 caracteres.';
+        } elseif ($address !== null && mb_strlen($address) > 256) {
+            $error = 'La dirección admite hasta 256 caracteres.';
+        } elseif ($email !== null && $email !== '' && (mb_strlen($email) > 128 || !filter_var($email, FILTER_VALIDATE_EMAIL))) {
+            $error = 'El email no es válido.';
+        } elseif ($vertical !== null && $vertical !== '' && !in_array($vertical, WhatsAppService::VERTICALS, true)) {
+            $error = 'Categoría inválida.';
+        }
+        foreach ([$web1, $web2] as $w) {
+            if ($error === null && $w !== null && $w !== '' && (mb_strlen($w) > 256 || !preg_match('#^https?://[^\s<>"]+\.[^\s<>"]+$#i', $w))) {
+                $error = 'Los sitios web deben empezar por https:// (o http://).';
+            }
+        }
+        if ($error !== null) {
+            return $this->jsonResponse($response, ['error' => $error], 400);
+        }
+
+        $fields = array_filter([
+            'addLine1'     => $address,
+            'desc'         => $desc,
+            'profileEmail' => $email,
+            'website1'     => $web1,
+            'website2'     => $web2,
+            'vertical'     => $vertical,
+        ], static fn ($v) => $v !== null);
+
+        try {
+            if (!empty($fields)) {
+                $this->wa->updateProfile($fields);
+            }
+            if ($about !== null) {
+                $this->wa->updateAbout($about);
+            }
+        } catch (\Throwable $e) {
+            return $this->profileError($response, $e);
+        }
+
+        Logger::audit()->info('Perfil de WhatsApp actualizado', array_merge(
+            Logger::requestContext(),
+            ['campos' => array_keys($fields + ($about !== null ? ['about' => 1] : [])), 'por' => $request->getAttribute('user')['email'] ?? null]
+        ));
+
+        try {
+            $profile = $this->wa->getProfile();
+        } catch (\Throwable) {
+            $profile = null;
+        }
+
+        return $this->jsonResponse($response, ['success' => true, 'message' => 'Perfil actualizado en WhatsApp.', 'profile' => $profile]);
+    }
+
+    /** Foto de perfil: multipart "photo", JPG/PNG, mín. 192 px, máx. 5 MB. */
+    public function uploadPhoto(Request $request, Response $response): Response
+    {
+        if (!$this->wa->isConfigured()) {
+            return $this->jsonResponse($response, ['error' => 'La línea de WhatsApp todavía no está activada.'], 409);
+        }
+        $file = $request->getUploadedFiles()['photo'] ?? null;
+        if (!$file instanceof \Psr\Http\Message\UploadedFileInterface || $file->getError() !== UPLOAD_ERR_OK) {
+            return $this->jsonResponse($response, ['error' => 'No se recibió ninguna imagen (máx. 5 MB).'], 400);
+        }
+        if ((int) $file->getSize() > self::PHOTO_MAX_BYTES) {
+            return $this->jsonResponse($response, ['error' => 'La imagen supera 5 MB.'], 400);
+        }
+
+        $tmp = tempnam(sys_get_temp_dir(), 'ccwa_');
+        if ($tmp === false) {
+            return $this->jsonResponse($response, ['error' => 'No se pudo procesar la imagen.'], 500);
+        }
+        try {
+            $file->moveTo($tmp);
+            // Se valida el contenido real, no la extensión.
+            $info = @getimagesize($tmp);
+            $type = $info[2] ?? null;
+            if (!in_array($type, [IMAGETYPE_JPEG, IMAGETYPE_PNG], true)) {
+                return $this->jsonResponse($response, ['error' => 'Formato no admitido. Usa JPG o PNG.'], 400);
+            }
+            if (min((int) $info[0], (int) $info[1]) < self::PHOTO_MIN_PX) {
+                return $this->jsonResponse($response, ['error' => 'La imagen debe medir al menos 192×192 px (recomendado 640×640).'], 400);
+            }
+            $this->wa->updatePhoto($tmp, 'perfil.' . ($type === IMAGETYPE_PNG ? 'png' : 'jpg'));
+        } catch (\Throwable $e) {
+            return $this->profileError($response, $e);
+        } finally {
+            @unlink($tmp);
+        }
+
+        Logger::audit()->info('Foto de perfil de WhatsApp actualizada', array_merge(
+            Logger::requestContext(),
+            ['por' => $request->getAttribute('user')['email'] ?? null]
+        ));
+
+        return $this->jsonResponse($response, [
+            'success' => true,
+            'message' => 'Foto actualizada. WhatsApp puede tardar unos minutos en mostrarla.',
+        ]);
+    }
+
+    private function profileError(Response $response, \Throwable $e): Response
+    {
+        $msg = $e->getMessage();
+        if (stripos($msg, 'not live') !== false) {
+            return $this->jsonResponse($response, [
+                'error'   => 'El perfil se puede editar cuando el número esté registrado en WhatsApp.',
+                'notLive' => true,
+            ], 409);
+        }
+        Logger::app()->warning('Error en el perfil de WhatsApp', ['error' => $msg]);
+
+        return $this->jsonResponse($response, ['error' => $msg], 502);
+    }
+
     // ------------------------------------------------------------ plantillas --
 
     public function templates(Request $request, Response $response): Response

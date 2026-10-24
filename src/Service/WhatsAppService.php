@@ -198,6 +198,91 @@ class WhatsAppService
         ];
     }
 
+    // ------------------------------------------------------ perfil de empresa --
+    // Solo funciona con la app en vivo (número registrado). Endpoints:
+    //   GET/PUT /business/profile        dirección, descripción, email, webs, categoría
+    //   GET/PUT /business/profile/about  texto "Info" bajo el nombre
+    //   GET/PUT /business/profile/photo  foto de perfil (multipart "image")
+
+    /** Categorías que admite Meta para el perfil. */
+    public const VERTICALS = [
+        'OTHER', 'AUTO', 'BEAUTY', 'APPAREL', 'EDU', 'ENTERTAIN', 'EVENT_PLAN', 'FINANCE', 'GROCERY',
+        'GOVT', 'HOTEL', 'HEALTH', 'NONPROFIT', 'PROF_SERVICES', 'RETAIL', 'TRAVEL', 'RESTAURANT',
+    ];
+
+    /**
+     * @return array{address:?string,description:?string,email:?string,website1:?string,website2:?string,
+     *               vertical:?string,about:?string,photoUrl:?string}
+     */
+    public function getProfile(): array
+    {
+        $this->assertConfigured();
+        [$code, $data, $raw] = $this->request('GET', '/business/profile/');
+        if ($code >= 400 || ($data['status'] ?? '') === 'error') {
+            throw new \RuntimeException(self::errorMessage($data, $raw, $code));
+        }
+        $p = is_array($data['profile'] ?? null) ? $data['profile'] : [];
+        $str = static fn ($v) => is_scalar($v) && trim((string) $v) !== '' ? trim((string) $v) : null;
+
+        // "Info" y foto vienen de endpoints aparte; si fallan no se pierde el resto.
+        $about = null;
+        [$c2, $d2] = $this->request('GET', '/business/profile/about');
+        if ($c2 < 400) {
+            $about = $str($d2['about']['message'] ?? $d2['about'] ?? null);
+        }
+        $photo = null;
+        [$c3, $d3] = $this->request('GET', '/business/profile/photo');
+        if ($c3 < 400) {
+            $url = $str($d3['message'] ?? $d3['url'] ?? null);
+            $photo = $url !== null && preg_match('#^https://#i', $url) ? $url : null;
+        }
+
+        return [
+            'address'     => $str($p['address'] ?? $p['addLine1'] ?? null),
+            'description' => $str($p['desc'] ?? null),
+            'email'       => $str($p['profileEmail'] ?? null),
+            'website1'    => $str($p['website1'] ?? null),
+            'website2'    => $str($p['website2'] ?? null),
+            'vertical'    => $str($p['vertical'] ?? null),
+            'about'       => $about,
+            'photoUrl'    => $photo,
+        ];
+    }
+
+    /** @param array<string,string> $fields claves de Gupshup: addLine1, desc, profileEmail, website1, website2, vertical */
+    public function updateProfile(array $fields): void
+    {
+        $this->assertConfigured();
+        [$code, $data, $raw] = $this->request('PUT', '/business/profile', ['form_params' => $fields]);
+        if ($code >= 400 || ($data['status'] ?? '') === 'error') {
+            throw new \RuntimeException(self::errorMessage($data, $raw, $code));
+        }
+    }
+
+    public function updateAbout(string $about): void
+    {
+        $this->assertConfigured();
+        [$code, $data, $raw] = $this->request('PUT', '/business/profile/about', ['form_params' => ['about' => $about]]);
+        if ($code >= 400 || ($data['status'] ?? '') === 'error') {
+            throw new \RuntimeException(self::errorMessage($data, $raw, $code));
+        }
+    }
+
+    public function updatePhoto(string $path, string $filename): void
+    {
+        $this->assertConfigured();
+        $bytes = @file_get_contents($path);
+        if ($bytes === false || $bytes === '') {
+            throw new \RuntimeException('No se pudo leer la imagen.');
+        }
+        [$code, $data, $raw] = $this->request('PUT', '/business/profile/photo', [
+            'multipart' => [['name' => 'image', 'contents' => $bytes, 'filename' => $filename]],
+        ]);
+        if ($code >= 400 || ($data['status'] ?? '') === 'error') {
+            throw new \RuntimeException(self::errorMessage($data, $raw, $code));
+        }
+    }
+
     // ------------------------------------------------------------- interno --
 
     private function assertConfigured(): void

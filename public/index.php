@@ -104,6 +104,10 @@ $app->group('/api', function ($group) {
         $admin->post('/whatsapp/templates', 'App\Controllers\WhatsAppController:createTemplate');
         $admin->post('/whatsapp/templates/sync', 'App\Controllers\WhatsAppController:syncTemplates');
         $admin->delete('/whatsapp/templates/{id}', 'App\Controllers\WhatsAppController:deleteTemplate');
+        // WhatsApp: perfil de empresa (lo ven los clientes en WhatsApp).
+        $admin->get('/whatsapp/profile', 'App\Controllers\WhatsAppController:profile');
+        $admin->post('/whatsapp/profile', 'App\Controllers\WhatsAppController:updateProfile');
+        $admin->post('/whatsapp/profile/photo', 'App\Controllers\WhatsAppController:uploadPhoto');
         $admin->delete('/campaigns/{id}', 'App\Controllers\CampaignController:delete');
     })->add(new RoleMiddleware('admin'));
 

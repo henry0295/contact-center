@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Send, Loader2, Users, Tag, Clock, CalendarX, FileText, Trash2, TestTube2, Smartphone,
   Sparkles, Download, MessageSquareReply, RefreshCw, Plus, Radio, Copy, ExternalLink,
-  CheckCircle2, AlertTriangle, Search,
+  CheckCircle2, AlertTriangle, Search, Building2, Upload, Globe, Mail, MapPin,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as api from '../services/api';
@@ -12,7 +12,7 @@ import {
   type RecipientEntry, parseRecipients, parseRecipientsCsv, downloadCsv, PHONE_HEADERS,
 } from '../utils/csvRecipients';
 
-type Tab = 'compose' | 'templates' | 'replies' | 'line';
+type Tab = 'compose' | 'templates' | 'replies' | 'line' | 'profile';
 type RecipientSource = 'paste' | 'csv' | 'list';
 
 const MEDIA_TYPES = ['IMAGE', 'VIDEO', 'DOCUMENT'];
@@ -185,6 +185,7 @@ const WhatsAppModule: React.FC = () => {
           {tabButton('templates', 'Plantillas', FileText)}
           {tabButton('replies', 'Respuestas', MessageSquareReply)}
           {tabButton('line', 'Línea', Radio)}
+          {isAdmin && status?.configured && tabButton('profile', 'Perfil', Building2)}
         </nav>
 
         {tab === 'compose' && (
@@ -202,6 +203,7 @@ const WhatsAppModule: React.FC = () => {
         )}
         {tab === 'replies' && <Replies />}
         {tab === 'line' && <Line status={status} loading={statusLoading} isAdmin={isAdmin} refresh={() => loadStatus(true)} />}
+        {tab === 'profile' && isAdmin && <Profile pendingSignup={status?.pendingSignup ?? false} />}
       </div>
     </div>
   );
@@ -1073,6 +1075,252 @@ const Line: React.FC<{ status: api.WaStatus | null; loading: boolean; isAdmin: b
       {!status.configured && (
         <p className="text-sm text-gray-600">Para activar la línea de WhatsApp, contacta a tu proveedor.</p>
       )}
+    </div>
+  );
+};
+
+// ------------------------------------------------------------- Perfil -----
+
+const VERTICAL_LABELS: Record<string, string> = {
+  OTHER: 'Otro', AUTO: 'Automotriz', BEAUTY: 'Belleza, spa y salón', APPAREL: 'Ropa y accesorios',
+  EDU: 'Educación', ENTERTAIN: 'Entretenimiento', EVENT_PLAN: 'Eventos', FINANCE: 'Finanzas y banca',
+  GROCERY: 'Supermercado', GOVT: 'Servicios públicos y gobierno', HOTEL: 'Hotel y alojamiento',
+  HEALTH: 'Medicina y salud', NONPROFIT: 'Sin ánimo de lucro', PROF_SERVICES: 'Servicios profesionales',
+  RETAIL: 'Comercio', TRAVEL: 'Viajes y transporte', RESTAURANT: 'Restaurante',
+};
+
+type ProfileForm = Record<'about' | 'description' | 'address' | 'email' | 'website1' | 'website2' | 'vertical', string>;
+
+const toForm = (p: api.WaProfile): ProfileForm => ({
+  about: p.about ?? '', description: p.description ?? '', address: p.address ?? '', email: p.email ?? '',
+  website1: p.website1 ?? '', website2: p.website2 ?? '', vertical: p.vertical ?? '',
+});
+
+const Profile: React.FC<{ pendingSignup: boolean }> = ({ pendingSignup }) => {
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [original, setOriginal] = useState<ProfileForm | null>(null);
+  const [form, setForm] = useState<ProfileForm | null>(null);
+  const [verticals, setVerticals] = useState<string[]>([]);
+  const [photoUrl, setPhotoUrl] = useState<string | null>(null);
+  const [photoFile, setPhotoFile] = useState<File | null>(null);
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
+
+  const load = useCallback(() => {
+    setLoading(true);
+    setError(null);
+    api.getWaProfile()
+      .then((r) => {
+        const f = toForm(r.profile);
+        setOriginal(f);
+        setForm(f);
+        setVerticals(r.verticals);
+        setPhotoUrl(r.profile.photoUrl);
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : 'No se pudo cargar el perfil'))
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    if (!photoFile) { setPhotoPreview(null); return; }
+    const url = URL.createObjectURL(photoFile);
+    setPhotoPreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [photoFile]);
+
+  const onPhoto = (file?: File) => {
+    if (!file) return;
+    if (!['image/jpeg', 'image/png'].includes(file.type)) { toast.error('Usa una imagen JPG o PNG.'); return; }
+    if (file.size > 5 * 1024 * 1024) { toast.error('La imagen supera 5 MB.'); return; }
+    setPhotoFile(file);
+  };
+
+  const uploadPhoto = async () => {
+    if (!photoFile) return;
+    setUploading(true);
+    try {
+      const r = await api.uploadWaProfilePhoto(photoFile);
+      toast.success(r.message);
+      setPhotoUrl(photoPreview);
+      setPhotoFile(null);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'No se pudo subir la foto');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const save = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!form || !original) return;
+    if (form.about.trim() === '') { toast.error('La información ("Info") es obligatoria.'); return; }
+    // Solo se envían los campos que cambiaron.
+    const changes: api.WaProfileInput = {};
+    (Object.keys(form) as (keyof ProfileForm)[]).forEach((k) => {
+      if (form[k].trim() !== original[k].trim()) changes[k] = form[k].trim();
+    });
+    if (Object.keys(changes).length === 0) { toast('No hay cambios.'); return; }
+    setSaving(true);
+    try {
+      const r = await api.updateWaProfile(changes);
+      toast.success(r.message);
+      const f = r.profile ? toForm(r.profile) : { ...form };
+      setOriginal(f);
+      setForm(f);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'No se pudo guardar');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) {
+    return <p className="flex items-center p-6 text-sm text-gray-500"><Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" /> Cargando el perfil...</p>;
+  }
+  if (error || !form) {
+    return (
+      <div className="p-6">
+        <div className="flex items-start gap-3 rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+          <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
+          <div>
+            <p className="font-medium">{pendingSignup ? 'El perfil se puede editar cuando el número esté registrado en WhatsApp.' : error}</p>
+            <button type="button" onClick={load} className="mt-2 text-sm font-medium underline">Reintentar</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const set = (k: keyof ProfileForm) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) =>
+    setForm({ ...form, [k]: e.target.value });
+  const shownPhoto = photoPreview ?? photoUrl;
+
+  return (
+    <div className="grid grid-cols-1 gap-6 p-6 lg:grid-cols-3">
+      <form onSubmit={save} className="space-y-5 lg:col-span-2">
+        <div className="flex flex-wrap items-center gap-4 rounded-md border border-gray-200 p-4">
+          <div className="h-20 w-20 shrink-0 overflow-hidden rounded-full bg-gray-100">
+            {shownPhoto
+              ? <img src={shownPhoto} alt="Foto de perfil de WhatsApp" className="h-full w-full object-cover" />
+              : <div className="flex h-full w-full items-center justify-center text-gray-400"><Building2 className="h-8 w-8" aria-hidden="true" /></div>}
+          </div>
+          <div className="min-w-0 flex-1 space-y-2">
+            <p className="text-sm font-medium text-gray-900">Foto de perfil</p>
+            <p className="text-xs text-gray-500">JPG o PNG cuadrada, mínimo 192×192 px (recomendado 640×640), máximo 5 MB. WhatsApp la recorta en círculo.</p>
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="inline-flex cursor-pointer items-center rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 focus-within:ring-2 focus-within:ring-green-600">
+                <Upload className="mr-1.5 h-4 w-4" aria-hidden="true" /> Elegir imagen
+                <input type="file" accept="image/jpeg,image/png" className="sr-only" onChange={(e) => { onPhoto(e.target.files?.[0]); e.target.value = ''; }} />
+              </label>
+              {photoFile && (
+                <>
+                  <button
+                    type="button"
+                    onClick={uploadPhoto}
+                    disabled={uploading}
+                    className="inline-flex items-center rounded-md bg-green-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50"
+                  >
+                    {uploading && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" aria-hidden="true" />} Subir foto
+                  </button>
+                  <button type="button" onClick={() => setPhotoFile(null)} className="text-sm text-gray-500 hover:underline">Descartar</button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <label htmlFor="waAbout" className={labelClass}>Info *</label>
+          <input id="waAbout" type="text" maxLength={139} value={form.about} onChange={set('about')} className={inputClass} placeholder="Atención de lunes a viernes, 8 a. m. a 6 p. m." />
+          <p className="mt-1 text-right text-xs text-gray-500">{form.about.length}/139 · se ve bajo el nombre del negocio</p>
+        </div>
+        <div>
+          <label htmlFor="waDesc" className={labelClass}>Descripción</label>
+          <textarea id="waDesc" rows={4} maxLength={512} value={form.description} onChange={set('description')} className={inputClass} placeholder="A qué se dedica la empresa." />
+          <p className="mt-1 text-right text-xs text-gray-500">{form.description.length}/512</p>
+        </div>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div>
+            <label htmlFor="waVertical" className={labelClass}>Categoría</label>
+            <select id="waVertical" value={form.vertical} onChange={set('vertical')} className={inputClass}>
+              <option value="">Sin categoría</option>
+              {verticals.map((v) => <option key={v} value={v}>{VERTICAL_LABELS[v] ?? v}</option>)}
+            </select>
+          </div>
+          <div>
+            <label htmlFor="waEmail" className={labelClass}>Email</label>
+            <input id="waEmail" type="email" maxLength={128} value={form.email} onChange={set('email')} className={inputClass} placeholder="contacto@empresa.com" />
+          </div>
+        </div>
+        <div>
+          <label htmlFor="waAddress" className={labelClass}>Dirección</label>
+          <input id="waAddress" type="text" maxLength={256} value={form.address} onChange={set('address')} className={inputClass} placeholder="Calle 00 # 00-00, Bogotá" />
+        </div>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div>
+            <label htmlFor="waWeb1" className={labelClass}>Sitio web</label>
+            <input id="waWeb1" type="url" maxLength={256} value={form.website1} onChange={set('website1')} className={inputClass} placeholder="https://empresa.com" />
+          </div>
+          <div>
+            <label htmlFor="waWeb2" className={labelClass}>Segundo sitio web</label>
+            <input id="waWeb2" type="url" maxLength={256} value={form.website2} onChange={set('website2')} className={inputClass} placeholder="https://..." />
+          </div>
+        </div>
+
+        <div className="rounded-md border border-gray-200 bg-gray-50 p-3 text-xs text-gray-600">
+          <p className="font-medium text-gray-800">Nombre visible</p>
+          <p className="mt-1">
+            El nombre que ven los clientes lo revisa Meta. Se cambia en{' '}
+            <a href="https://business.facebook.com/wa/manage/phone-numbers/" target="_blank" rel="noopener noreferrer" className="font-medium text-green-700 underline">
+              WhatsApp Manager
+            </a>{' '}
+            → Números de teléfono → Editar nombre visible (la revisión tarda de 1 a 3 días).
+          </p>
+        </div>
+
+        <div className="flex justify-end gap-3 border-t border-gray-200 pt-4">
+          <button type="button" onClick={() => original && setForm(original)} className="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">
+            Deshacer cambios
+          </button>
+          <button type="submit" disabled={saving} className="inline-flex items-center rounded-md bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50">
+            {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />} Guardar perfil
+          </button>
+        </div>
+      </form>
+
+      {/* Vista previa del perfil como lo ve el cliente */}
+      <div className="lg:col-span-1">
+        <div className="rounded-lg border border-gray-200 p-4">
+          <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-gray-700">
+            <Smartphone className="h-4 w-4 text-gray-400" aria-hidden="true" /> Así se verá
+          </h3>
+          <div className="mx-auto max-w-[280px] overflow-hidden rounded-2xl border border-gray-200 bg-white text-sm shadow">
+            <div className="flex flex-col items-center bg-gray-50 px-4 py-5">
+              <div className="h-20 w-20 overflow-hidden rounded-full bg-gray-200">
+                {shownPhoto
+                  ? <img src={shownPhoto} alt="" className="h-full w-full object-cover" />
+                  : <div className="flex h-full w-full items-center justify-center text-gray-400"><Building2 className="h-8 w-8" aria-hidden="true" /></div>}
+              </div>
+              <p className="mt-2 font-semibold text-gray-900">Tu empresa</p>
+              <p className="text-xs text-gray-500">Cuenta de empresa</p>
+            </div>
+            <div className="space-y-2 px-4 py-3 text-gray-700">
+              {form.about && <p className="text-gray-800">{form.about}</p>}
+              {form.description && <p className="whitespace-pre-wrap text-xs text-gray-600">{form.description}</p>}
+              {form.vertical && <p className="text-xs text-gray-500">{VERTICAL_LABELS[form.vertical] ?? form.vertical}</p>}
+              {form.address && <p className="flex items-start gap-1.5 text-xs"><MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-gray-400" aria-hidden="true" />{form.address}</p>}
+              {form.email && <p className="flex items-center gap-1.5 text-xs"><Mail className="h-3.5 w-3.5 text-gray-400" aria-hidden="true" />{form.email}</p>}
+              {[form.website1, form.website2].filter(Boolean).map((w) => (
+                <p key={w} className="flex items-center gap-1.5 truncate text-xs text-[#00A5F4]"><Globe className="h-3.5 w-3.5 shrink-0 text-gray-400" aria-hidden="true" />{w}</p>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 };
