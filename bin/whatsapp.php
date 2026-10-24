@@ -278,11 +278,16 @@ function cmdStatus(EnvFile $env): int
     try {
         $h = $svc->health();
         out('Estado: ' . ($h['healthy'] ? 'activa' : 'con problemas — ' . $h['message']));
-        $r = $svc->ratings();
-        if ($r['quality'] !== null || $r['limit'] !== null) {
-            out('Calidad: ' . ($r['quality'] ?? '-') . ' · Límite: ' . ($r['limit'] ?? '-'));
-        } elseif ($r['message']) {
-            out('Calidad: ' . $r['message']);
+        $w = $svc->wabaInfo();
+        if ($w['quality'] !== null || $w['limit'] !== null) {
+            out('Calidad: ' . ($w['quality'] ?? 'sin calificar') . ' · Límite diario: ' . ($w['limit'] ?? 'sin asignar'));
+            out('Nombre visible: ' . ($w['displayName'] ?? 'pendiente') . ' · Número: ' . ($w['phone'] ?? '-'));
+            out('Envío: ' . ($w['canSendMessage'] ?? '-') . ' · Cuenta: ' . ($w['accountStatus'] ?? '-'));
+            foreach (array_merge($w['errors'], $w['notes']) as $n) {
+                out('  · ' . $n);
+            }
+        } else {
+            out('Calidad/límite: sin datos' . ($w['message'] !== null ? ' — ' . $w['message'] : ''));
         }
         $tpls = $svc->listTemplates();
         $approved = count(array_filter($tpls, static fn ($t) => strtoupper((string) ($t['status'] ?? '')) === 'APPROVED'));
@@ -292,6 +297,38 @@ function cmdStatus(EnvFile $env): int
     }
     $hook = envValue($env, 'WHATSAPP_WEBHOOK_URL');
     out('Webhook: ' . ($hook !== '' ? 'registrado en ' . $hook : 'NO registrado (ejecuta subscribe con APP_URL https público)'));
+
+    return 0;
+}
+
+/**
+ * Diagnóstico: imprime el código HTTP y la respuesta cruda de cada endpoint
+ * de la app. Sirve para ver por qué la calidad o el perfil llegan vacíos.
+ */
+function cmdProbe(EnvFile $env): int
+{
+    foreach (['GUPSHUP_APP_ID', 'GUPSHUP_APP_TOKEN', 'GUPSHUP_BASE_URL'] as $k) {
+        $v = envValue($env, $k);
+        if ($v !== '') {
+            $_ENV[$k] = $v;
+        }
+    }
+    $svc = new WhatsAppService();
+    if (!$svc->isConfigured()) {
+        fail('Faltan GUPSHUP_APP_ID / GUPSHUP_APP_TOKEN en el .env.', 2);
+    }
+    out('App de Gupshup: ' . WhatsAppService::appId());
+    foreach (['/health', '/waba/info', '/ratings', '/business/profile', '/business/profile/about', '/business/profile/photo'] as $path) {
+        out('');
+        out('GET ' . $path);
+        try {
+            [$code, $raw] = $svc->probe($path);
+            out('  HTTP ' . $code);
+            out('  ' . (trim($raw) === '' ? '(respuesta vacía)' : mb_substr(preg_replace('/\s+/', ' ', $raw) ?? $raw, 0, 1000)));
+        } catch (\Throwable $e) {
+            out('  ERROR ' . $e->getMessage());
+        }
+    }
 
     return 0;
 }
@@ -336,8 +373,11 @@ switch ($command) {
     case 'status':
         exit(cmdStatus($env));
 
+    case 'probe':
+        exit(cmdProbe($env));
+
     default:
-        out('Uso: php bin/whatsapp.php activate --name=<cliente> | link [--regenerate] | token | subscribe | status');
+        out('Uso: php bin/whatsapp.php activate --name=<cliente> | link [--regenerate] | token | subscribe | status | probe');
         out('Las operaciones de partner requieren GUPSHUP_PARTNER_EMAIL y GUPSHUP_PARTNER_SECRET en el entorno.');
         exit($command === 'help' ? 0 : 2);
 }

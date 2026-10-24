@@ -680,6 +680,18 @@ const Replies: React.FC = () => {
 // -------------------------------------------------------------- Línea -----
 
 const QUALITY_LABELS: Record<string, string> = { GREEN: 'Alta', YELLOW: 'Media', RED: 'Baja' };
+const QUALITY_COLORS: Record<string, string> = { GREEN: 'text-green-700', YELLOW: 'text-amber-600', RED: 'text-red-600' };
+
+/** Conversaciones nuevas que Meta permite iniciar cada 24 h. */
+const TIER_LABELS: Record<string, string> = {
+  TIER_50: '50 al día',
+  TIER_250: '250 al día',
+  TIER_1K: '1.000 al día',
+  TIER_2K: '2.000 al día',
+  TIER_10K: '10.000 al día',
+  TIER_100K: '100.000 al día',
+  TIER_UNLIMITED: 'Sin límite',
+};
 
 const Line: React.FC<{ status: api.WaStatus | null; loading: boolean; isAdmin: boolean; refresh: () => void }> = ({ status, loading, isAdmin, refresh }) => {
   if (!status) {
@@ -690,6 +702,8 @@ const Line: React.FC<{ status: api.WaStatus | null; loading: boolean; isAdmin: b
     if (!status.onboardingLink) return;
     navigator.clipboard.writeText(status.onboardingLink).then(() => toast.success('Enlace copiado'), () => toast.error('No se pudo copiar'));
   };
+
+  const tierLabel = status.messagingLimit ? TIER_LABELS[status.messagingLimit] ?? null : null;
 
   return (
     <div className="space-y-6 p-6">
@@ -714,15 +728,41 @@ const Line: React.FC<{ status: api.WaStatus | null; loading: boolean; isAdmin: b
         )}
       </div>
 
+      {status.configured && (status.displayName || status.phone) && (
+        <dl className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div className="rounded-md border border-gray-200 p-4">
+            <dt className="text-xs text-gray-500">Nombre visible</dt>
+            <dd className="mt-1 text-lg font-semibold text-gray-900">{status.displayName ?? 'Pendiente de aprobación'}</dd>
+            <dd className="mt-1 text-xs text-gray-500">Es el nombre que ven tus clientes en WhatsApp.</dd>
+          </div>
+          <div className="rounded-md border border-gray-200 p-4">
+            <dt className="text-xs text-gray-500">Número de la línea</dt>
+            <dd className="mt-1 text-lg font-semibold text-gray-900">{status.phone ? `+${status.phone}` : '-'}</dd>
+          </div>
+        </dl>
+      )}
+
       {status.configured && (
         <dl className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <div className="rounded-md border border-gray-200 p-4">
             <dt className="text-xs text-gray-500">Calidad del número</dt>
-            <dd className="mt-1 text-lg font-semibold text-gray-900">{status.quality ? QUALITY_LABELS[status.quality] ?? status.quality : '-'}</dd>
+            <dd className={`mt-1 text-lg font-semibold ${status.quality ? QUALITY_COLORS[status.quality] ?? 'text-gray-900' : 'text-gray-900'}`}>
+              {status.quality ? QUALITY_LABELS[status.quality] ?? status.quality : 'Sin calificar'}
+            </dd>
+            <dd className="mt-1 text-xs text-gray-500">
+              {status.quality
+                ? 'La calcula Meta con los reportes y bloqueos de tus clientes.'
+                : 'Meta la asigna cuando el número empieza a recibir mensajes.'}
+            </dd>
           </div>
           <div className="rounded-md border border-gray-200 p-4">
             <dt className="text-xs text-gray-500">Límite diario de mensajes</dt>
-            <dd className="mt-1 text-lg font-semibold text-gray-900">{status.messagingLimit?.replace('TIER_', '') ?? '-'}</dd>
+            <dd className="mt-1 text-lg font-semibold text-gray-900">{tierLabel ?? 'Sin asignar'}</dd>
+            <dd className="mt-1 text-xs text-gray-500">
+              {tierLabel
+                ? 'Conversaciones nuevas que puedes iniciar cada 24 horas. Sube solo con el uso.'
+                : 'Meta lo asigna al aprobar el nombre visible y empezar a enviar.'}
+            </dd>
           </div>
           <div className="rounded-md border border-gray-200 p-4">
             <dt className="text-xs text-gray-500">Webhook (estados y respuestas)</dt>
@@ -733,6 +773,13 @@ const Line: React.FC<{ status: api.WaStatus | null; loading: boolean; isAdmin: b
           </div>
         </dl>
       )}
+
+      {status.canSendMessage === 'BLOCKED' && (
+        <p className="text-sm text-red-600">Meta bloqueó el envío desde esta línea. Contacta a tu proveedor.</p>
+      )}
+      {status.canSendMessage === 'LIMITED' && (
+        <p className="text-sm text-amber-700">Meta limitó temporalmente el envío desde esta línea.</p>
+      )}
       {status.healthMessage && (
         <p className={`text-sm ${status.pendingSignup ? 'text-amber-700' : 'text-red-600'}`}>
           {status.healthMessage}
@@ -741,7 +788,17 @@ const Line: React.FC<{ status: api.WaStatus | null; loading: boolean; isAdmin: b
       )}
       {status.checkedAt && <p className="text-xs text-gray-400">Última comprobación: {new Date(status.checkedAt).toLocaleString('es-CO')}</p>}
 
-      {isAdmin && status.onboardingLink && (
+      {isAdmin && (status.lineNotes?.length ?? 0) > 0 && (
+        <div className="rounded-md border border-gray-200 bg-gray-50 p-4 text-xs text-gray-600">
+          <p className="font-medium text-gray-800">Avisos de Meta (soporte)</p>
+          <ul className="mt-1 list-disc space-y-1 pl-4">
+            {status.lineNotes?.map((n) => <li key={n}>{n}</li>)}
+          </ul>
+        </div>
+      )}
+
+      {/* El enlace de registro solo sirve antes de activar la línea. */}
+      {isAdmin && !status.healthy && status.onboardingLink && (
         <div className="rounded-md border border-green-200 bg-green-50 p-4 text-sm text-green-900">
           <p className="font-medium">Registro del número en WhatsApp Business</p>
           <p className="mt-1">

@@ -39,8 +39,11 @@ class WhatsAppController
     // ----------------------------------------------------------------- línea --
 
     /**
-     * Estado de la línea. health se cachea 10 min y ratings 24 h (límites de
-     * la API de Gupshup: 10/min y 1 cada 24 h).
+     * Estado de la línea, cacheado 10 min (la API de Gupshup admite 10
+     * peticiones por minuto). La calidad y el límite diario salen de
+     * /waba/info, que los da en tiempo real; /ratings solo se consulta como
+     * respaldo porque está limitado a 1 petición cada 24 h y depende de que
+     * Meta haya enviado un evento.
      */
     public function status(Request $request, Response $response): Response
     {
@@ -56,7 +59,17 @@ class WhatsAppController
                 $cache['health'] = ['healthy' => false, 'message' => $e->getMessage()];
             }
             $cache['health_at'] = time();
-            if ((time() - (int) ($cache['ratings_at'] ?? 0)) > 86400) {
+
+            try {
+                $cache['waba'] = $this->wa->wabaInfo();
+            } catch (\Throwable $e) {
+                $cache['waba'] = ['message' => $e->getMessage()];
+            }
+            $cache['waba_at'] = time();
+
+            // Respaldo: solo si /waba/info no trajo calidad y no se consultó
+            // /ratings en las últimas 24 h (su límite es 1 petición al día).
+            if (($cache['waba']['quality'] ?? null) === null && (time() - (int) ($cache['ratings_at'] ?? 0)) > 86400) {
                 try {
                     $cache['ratings'] = $this->wa->ratings();
                 } catch (\Throwable $e) {
@@ -71,6 +84,15 @@ class WhatsAppController
         $healthy = (bool) ($cache['health']['healthy'] ?? false);
         $rawMessage = (string) ($cache['health']['message'] ?? '');
         $pendingSignup = !$healthy && stripos($rawMessage, 'not live') !== false;
+        $isAdmin = $this->isAdmin($request);
+        $waba = is_array($cache['waba'] ?? null) ? $cache['waba'] : [];
+        $quality = $waba['quality'] ?? $cache['ratings']['quality'] ?? null;
+        $limit = $waba['limit'] ?? $cache['ratings']['limit'] ?? null;
+        // Avisos de Meta (en inglés) y errores: solo para soporte.
+        $notes = $isAdmin ? array_values(array_merge(
+            is_array($waba['errors'] ?? null) ? $waba['errors'] : [],
+            is_array($waba['notes'] ?? null) ? $waba['notes'] : []
+        )) : [];
 
         return $this->jsonResponse($response, [
             'configured'       => $configured,
@@ -80,12 +102,20 @@ class WhatsAppController
             'pendingSignup'    => $configured && $pendingSignup,
             'healthMessage'    => $healthy || $rawMessage === '' ? null : self::friendlyHealth($rawMessage),
             // El detalle técnico solo para administradores (soporte).
-            'healthDetail'     => $this->isAdmin($request) && !$healthy && $rawMessage !== '' ? $rawMessage : null,
-            'quality'          => $cache['ratings']['quality'] ?? null,
-            'messagingLimit'   => $cache['ratings']['limit'] ?? null,
+            'healthDetail'     => $isAdmin && !$healthy && $rawMessage !== '' ? $rawMessage : null,
+            'quality'          => $quality,
+            'messagingLimit'   => $limit,
+            // Datos de la WABA: el nombre visible y el número que ven los clientes.
+            'displayName'      => $waba['displayName'] ?? null,
+            'phone'            => $waba['phone'] ?? null,
+            'canSendMessage'   => $waba['canSendMessage'] ?? null,
+            'accountStatus'    => $waba['accountStatus'] ?? null,
+            'wabaId'           => $isAdmin ? ($waba['wabaId'] ?? null) : null,
+            'lineNotes'        => $notes,
             'checkedAt'        => isset($cache['health_at']) ? date('c', (int) $cache['health_at']) : null,
-            // Solo se comparte con administradores: es el enlace de alta de la línea.
-            'onboardingLink'   => $this->isAdmin($request) && preg_match('#^https://#', $link) ? $link : null,
+            // Solo para administradores y solo mientras falte el registro: en
+            // cuanto la línea queda activa el enlace ya no sirve y desaparece.
+            'onboardingLink'   => $isAdmin && !$healthy && preg_match('#^https://#', $link) ? $link : null,
             // Solo true si Gupshup aceptó el webhook (bin/whatsapp.php subscribe
             // guarda WHATSAPP_WEBHOOK_URL al registrarlo).
             'webhookConfigured' => trim((string) ($_ENV['WHATSAPP_WEBHOOK_SECRET'] ?? '')) !== ''

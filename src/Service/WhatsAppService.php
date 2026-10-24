@@ -17,7 +17,8 @@ use GuzzleHttp\Client;
  *   GET  /partner/app/{appId}/templates       listar plantillas y su estado
  *   POST /partner/app/{appId}/templates       solicitar una plantilla nueva
  *   GET  /partner/app/{appId}/health          estado de la línea
- *   GET  /partner/app/{appId}/ratings         calidad y límite de mensajería
+ *   GET  /partner/app/{appId}/waba/info       calidad, límite diario, nombre visible (tiempo real)
+ *   GET  /partner/app/{appId}/ratings         último evento de calidad/límite (1 petición cada 24 h)
  */
 class WhatsAppService
 {
@@ -230,19 +231,88 @@ class WhatsAppService
         return ['healthy' => $healthy, 'message' => $healthy ? null : self::errorMessage($data, $raw, $code)];
     }
 
-    /** @return array{quality:?string,limit:?string,message:?string} */
+    /**
+     * Último evento de calidad/límite que Meta envió a Gupshup. Devuelve
+     * "no event update available" mientras Meta no haya enviado ninguno, y
+     * admite 1 petición cada 24 h, así que wabaInfo() es la fuente preferida.
+     *
+     * @return array{quality:?string,limit:?string,message:?string,code:int}
+     */
     public function ratings(): array
     {
         $this->assertConfigured();
         [$code, $data, $raw] = $this->request('GET', '/ratings');
         if ($code >= 400) {
-            return ['quality' => null, 'limit' => null, 'message' => self::errorMessage($data, $raw, $code)];
+            return ['quality' => null, 'limit' => null, 'message' => self::errorMessage($data, $raw, $code), 'code' => $code];
         }
 
         return [
             'quality' => isset($data['phoneQuality']) ? (string) $data['phoneQuality'] : null,
             'limit'   => isset($data['currentLimit']) ? (string) $data['currentLimit'] : null,
             'message' => isset($data['message']) && !isset($data['phoneQuality']) ? (string) $data['message'] : null,
+            'code'    => $code,
+        ];
+    }
+
+    /**
+     * Estado de la WABA en tiempo real: calidad, límite diario, nombre visible
+     * y los errores que reporte Meta. Admite 10 peticiones por minuto y, al
+     * contrario que ratings(), no depende de que Meta haya enviado un evento.
+     *
+     * @return array{quality:?string,limit:?string,accountStatus:?string,dockerStatus:?string,
+     *               canSendMessage:?string,displayName:?string,phone:?string,wabaId:?string,
+     *               notes:string[],errors:string[],message:?string,code:int}
+     */
+    public function wabaInfo(): array
+    {
+        $this->assertConfigured();
+        [$code, $data, $raw] = $this->request('GET', '/waba/info');
+        $info = is_array($data['wabaInfo'] ?? null) ? $data['wabaInfo'] : [];
+        if ($code >= 400 || ($data['status'] ?? '') === 'error' || $info === []) {
+            return self::emptyWabaInfo(self::errorMessage($data, $raw, $code), $code);
+        }
+
+        $str = static function ($v): ?string {
+            $v = is_scalar($v) ? trim((string) $v) : '';
+
+            return $v === '' || strcasecmp($v, 'UNKNOWN') === 0 ? null : $v;
+        };
+        $errors = [];
+        foreach (is_array($info['errors'] ?? null) ? $info['errors'] : [] as $e) {
+            if (is_array($e)) {
+                $errors[] = trim(($e['error_code'] ?? '') . ': ' . ($e['error_description'] ?? ''), ': ');
+            } elseif (is_scalar($e)) {
+                $errors[] = (string) $e;
+            }
+        }
+        $notes = array_values(array_filter(array_map(
+            static fn ($n) => is_scalar($n) ? trim((string) $n) : '',
+            is_array($info['additionalInfo'] ?? null) ? $info['additionalInfo'] : []
+        ), static fn (string $n) => $n !== ''));
+
+        return [
+            'quality'        => $str($info['phoneQuality'] ?? null),
+            'limit'          => $str($info['messagingLimit'] ?? null),
+            'accountStatus'  => $str($info['accountStatus'] ?? null),
+            'dockerStatus'   => $str($info['dockerStatus'] ?? null),
+            'canSendMessage' => $str($info['canSendMessage'] ?? null),
+            'displayName'    => $str($info['verifiedName'] ?? null),
+            'phone'          => $str($info['phone'] ?? null),
+            'wabaId'         => $str($info['wabaId'] ?? null),
+            'notes'          => $notes,
+            'errors'         => array_values(array_filter($errors)),
+            'message'        => null,
+            'code'           => $code,
+        ];
+    }
+
+    /** @return array<string,mixed> */
+    private static function emptyWabaInfo(?string $message, int $code): array
+    {
+        return [
+            'quality' => null, 'limit' => null, 'accountStatus' => null, 'dockerStatus' => null,
+            'canSendMessage' => null, 'displayName' => null, 'phone' => null, 'wabaId' => null,
+            'notes' => [], 'errors' => [], 'message' => $message, 'code' => $code,
         ];
     }
 
@@ -265,32 +335,56 @@ class WhatsAppService
     public function getProfile(): array
     {
         $this->assertConfigured();
-        [$code, $data, $raw] = $this->request('GET', '/business/profile/');
+        // Sin barra final: con ella la Partner API responde 404.
+        [$code, $data, $raw] = $this->request('GET', '/business/profile');
         if ($code >= 400 || ($data['status'] ?? '') === 'error') {
             throw new \RuntimeException(self::errorMessage($data, $raw, $code));
         }
-        $p = is_array($data['profile'] ?? null) ? $data['profile'] : [];
         $str = static fn ($v) => is_scalar($v) && trim((string) $v) !== '' ? trim((string) $v) : null;
 
+        // La respuesta llega como {profile:{...}}, {data:{...}} o plana según la
+        // versión de la API; se aceptan las tres para no perder los datos.
+        $p = [];
+        foreach (['profile', 'data'] as $k) {
+            if (is_array($data[$k] ?? null)) {
+                $p = $data[$k];
+                break;
+            }
+        }
+        if ($p === []) {
+            $p = array_diff_key($data, ['status' => 1, 'message' => 1]);
+        }
+        // Algunas versiones anidan otra vez (data.profile) y otras devuelven las
+        // webs en un array "websites" en lugar de website1/website2.
+        if (is_array($p['profile'] ?? null)) {
+            $p = $p['profile'];
+        }
+        $webs = array_values(array_filter(array_map(
+            $str,
+            is_array($p['websites'] ?? null) ? $p['websites'] : []
+        )));
+
         // "Info" y foto vienen de endpoints aparte; si fallan no se pierde el resto.
-        $about = null;
-        [$c2, $d2] = $this->request('GET', '/business/profile/about');
-        if ($c2 < 400) {
-            $about = $str($d2['about']['message'] ?? $d2['about'] ?? null);
+        $about = $str($p['about'] ?? null);
+        if ($about === null) {
+            [$c2, $d2] = $this->request('GET', '/business/profile/about');
+            if ($c2 < 400) {
+                $about = $str($d2['about']['message'] ?? $d2['about'] ?? $d2['data']['about'] ?? null);
+            }
         }
         $photo = null;
         [$c3, $d3] = $this->request('GET', '/business/profile/photo');
         if ($c3 < 400) {
-            $url = $str($d3['message'] ?? $d3['url'] ?? null);
+            $url = $str($d3['message'] ?? $d3['url'] ?? $d3['data']['photoUrl'] ?? $d3['data']['url'] ?? null);
             $photo = $url !== null && preg_match('#^https://#i', $url) ? $url : null;
         }
 
         return [
             'address'     => $str($p['address'] ?? $p['addLine1'] ?? null),
-            'description' => $str($p['desc'] ?? null),
-            'email'       => $str($p['profileEmail'] ?? null),
-            'website1'    => $str($p['website1'] ?? null),
-            'website2'    => $str($p['website2'] ?? null),
+            'description' => $str($p['desc'] ?? $p['description'] ?? null),
+            'email'       => $str($p['profileEmail'] ?? $p['email'] ?? null),
+            'website1'    => $str($p['website1'] ?? null) ?? ($webs[0] ?? null),
+            'website2'    => $str($p['website2'] ?? null) ?? ($webs[1] ?? null),
             'vertical'    => $str($p['vertical'] ?? null),
             'about'       => $about,
             'photoUrl'    => $photo,
@@ -329,6 +423,20 @@ class WhatsAppService
         if ($code >= 400 || ($data['status'] ?? '') === 'error') {
             throw new \RuntimeException(self::errorMessage($data, $raw, $code));
         }
+    }
+
+    /**
+     * Diagnóstico: devuelve el código HTTP y el cuerpo crudo de un endpoint de
+     * la app, sin interpretarlo. Solo lo usa bin/whatsapp.php probe.
+     *
+     * @return array{0:int,1:string}
+     */
+    public function probe(string $path): array
+    {
+        $this->assertConfigured();
+        [$code, , $raw] = $this->request('GET', $path);
+
+        return [$code, $raw];
     }
 
     // ------------------------------------------------------------- interno --
