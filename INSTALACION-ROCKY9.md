@@ -900,7 +900,9 @@ sudo systemctl reload php-fpm
   sudo -u contactcenter php $APP/bin/whatsapp.php subscribe
   ```
 
-  `deploy.sh` pide el servidor de cPanel (p.ej. `midominio.com`, puerto 2083 por defecto), el usuario y el token; valida con un registro TXT (acme.sh), instala el certificado en Nginx y lo renueva solo (`contact-center-acme.timer`). Solo se necesita el 443 abierto hacia el servidor. El token queda en `/root/.acme.sh/account.conf` (solo root).
+  Si la red del cliente no deja salir al puerto 2083 de cPanel, usa `--dns duckdns`: crea en www.duckdns.org un subdominio (p.ej. `vozip-unicuces`), y en el DNS del dominio un CNAME `_acme-challenge.cc` → `vozip-unicuces.duckdns.org`. `deploy.sh` pide el subdominio y el token de DuckDNS y solo usa el 443.
+
+  Con `--dns cpanel` (por defecto), `deploy.sh` pide el servidor de cPanel (p.ej. `midominio.com`, puerto 2083 por defecto), el usuario y el token; valida con un registro TXT (acme.sh), instala el certificado en Nginx y lo renueva solo (`contact-center-acme.timer`). Solo se necesita el 443 abierto hacia el servidor. El token queda en `/root/.acme.sh/account.conf` (solo root).
 - **Plantillas**: solo se envían las aprobadas por Meta. El administrador las crea (texto, hasta 3 botones) o las sincroniza en WhatsApp → Plantillas.
 - **Precios** por categoría de plantilla: marketing $90, utilidad $20, autenticación $20 (`credits.php set-price whatsapp_marketing 90`, `whatsapp_utility`, `whatsapp_authentication`). Si WhatsApp informa que no entregó el mensaje, se reembolsa.
 - Quien responda **SALIR / STOP / BAJA** queda dado de baja.
