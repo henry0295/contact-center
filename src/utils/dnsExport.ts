@@ -5,7 +5,7 @@
  */
 
 export interface DnsRecord {
-  type: 'TXT' | 'CNAME';
+  type: 'TXT' | 'CNAME' | 'MX';
   name: string;
   value: string;
   purpose: string;
@@ -17,6 +17,18 @@ export interface DnsDomain {
   verification_status: string | null;
   verification_token: string | null;
   dkim_tokens: string[];
+  mail_from_domain?: string | null;
+  mail_from_mx?: string;
+}
+
+/** Registros del dominio MAIL FROM (rebotes): MX hacia SES + SPF. */
+export function mailFromRecords(d: DnsDomain): DnsRecord[] {
+  if (!d.mail_from_domain) return [];
+  const mx = d.mail_from_mx || 'feedback-smtp.us-east-1.amazonses.com';
+  return [
+    { type: 'MX', name: d.mail_from_domain, value: `10 ${mx}`, purpose: 'MAIL FROM: recibe los rebotes y avisos de queja (prioridad 10)', required: true },
+    { type: 'TXT', name: d.mail_from_domain, value: 'v=spf1 include:amazonses.com ~all', purpose: 'MAIL FROM: SPF del subdominio de rebotes (alinea SPF para DMARC)', required: true },
+  ];
 }
 
 export function dnsRecords(d: DnsDomain): DnsRecord[] {
@@ -27,6 +39,7 @@ export function dnsRecords(d: DnsDomain): DnsRecord[] {
   for (const t of d.dkim_tokens) {
     out.push({ type: 'CNAME', name: `${t}._domainkey.${d.domain}`, value: `${t}.dkim.amazonses.com`, purpose: 'Firma DKIM de los correos', required: true });
   }
+  out.push(...mailFromRecords(d));
   // Recomendados: mejoran la entrega y la protección contra suplantación.
   out.push({ type: 'TXT', name: d.domain, value: 'v=spf1 include:amazonses.com ~all', purpose: 'SPF (si ya existe un SPF, solo añada include:amazonses.com)', required: false });
   out.push({ type: 'TXT', name: `_dmarc.${d.domain}`, value: 'v=DMARC1; p=none;', purpose: 'DMARC (política de autenticación)', required: false });
@@ -106,6 +119,7 @@ export function downloadDnsPdf(d: DnsDomain): boolean {
     <li>Si el panel agrega el dominio automáticamente, escriba en "Nombre" solo la parte anterior a <span class="mono">${esc(d.domain)}</span>.</li>
     <li>Los registros CNAME de DKIM no deben pasar por proxy (en Cloudflare: "Solo DNS").</li>
     <li>SPF: si el dominio ya tiene un registro <span class="mono">v=spf1</span>, no cree otro; añada <span class="mono">include:amazonses.com</span> al existente.</li>
+    <li>MX del MAIL FROM: en "Prioridad" ponga 10 y en "Destino" solo el servidor (sin el 10). Debe ser el único MX de ese subdominio y no afecta al correo del dominio principal.</li>
     <li>La verificación suele tardar menos de una hora (hasta 72 h).</li>
   </ol>
 </body></html>`);

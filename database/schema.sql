@@ -34,6 +34,12 @@ CREATE TABLE IF NOT EXISTS `senders` (
     UNIQUE KEY `uq_senders_email` (`email`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Dominio MAIL FROM personalizado (Return-Path propio, p.ej. bounce.midominio.com):
+-- los rebotes vuelven a un subdominio del cliente y SPF queda alineado para DMARC.
+-- mail_from_status: Pending | Success | Failed | TemporaryFailure (de SES).
+ALTER TABLE `domains` ADD COLUMN IF NOT EXISTS `mail_from_domain` VARCHAR(255) NULL;
+ALTER TABLE `domains` ADD COLUMN IF NOT EXISTS `mail_from_status` VARCHAR(32) NULL;
+
 -- Migración para instalaciones que ya tenían la tabla `senders` sin is_default.
 ALTER TABLE `senders` ADD COLUMN IF NOT EXISTS `is_default` TINYINT(1) NOT NULL DEFAULT 0;
 

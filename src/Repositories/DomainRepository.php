@@ -101,6 +101,16 @@ class DomainRepository
         return $stmt->rowCount() > 0;
     }
 
+    /** Guarda (o quita, con null) el dominio MAIL FROM y su estado. */
+    public function setMailFrom(string $domain, ?string $mailFrom, ?string $status): void
+    {
+        $stmt = $this->pdo->prepare('UPDATE domains SET mail_from_domain = :mf, mail_from_status = :st WHERE domain = :domain');
+        $stmt->bindValue(':mf', $mailFrom, $mailFrom === null ? PDO::PARAM_NULL : PDO::PARAM_STR);
+        $stmt->bindValue(':st', $status, $status === null ? PDO::PARAM_NULL : PDO::PARAM_STR);
+        $stmt->bindValue(':domain', $domain, PDO::PARAM_STR);
+        $stmt->execute();
+    }
+
     /** Remitentes guardados que pertenecen a este dominio (para avisar al borrar). */
     public function countSenders(string $domain): int
     {

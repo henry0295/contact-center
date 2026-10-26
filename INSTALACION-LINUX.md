@@ -611,6 +611,8 @@ Acciones que el código usa realmente:
         "ses:VerifyEmailIdentity",
         "ses:GetIdentityVerificationAttributes",
         "ses:GetIdentityDkimAttributes",
+        "ses:SetIdentityMailFromDomain",
+        "ses:GetIdentityMailFromDomainAttributes",
         "ses:ListIdentities",
         "ses:DeleteIdentity",
         "sns:Publish"
