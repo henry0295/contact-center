@@ -104,6 +104,10 @@ class WaTemplateSyncService
             if ($name === '' || $body === '') {
                 continue;
             }
+            // Ejemplos del sandbox de Gupshup (categorías antiguas): se ignoran.
+            if (WhatsAppRepository::isSampleCategory((string) ($t['category'] ?? ''))) {
+                continue;
+            }
             $language = (string) ($t['languageCode'] ?? 'es');
             $status = self::normalizeStatus((string) ($t['status'] ?? 'PENDING'));
             $reason = self::reasonOf($t, $meta);

@@ -25,11 +25,28 @@ class WhatsAppRepository
 
     // ------------------------------------------------------------ plantillas --
 
+    /**
+     * Categorías actuales de Meta. Las plantillas con otra categoría
+     * (ACCOUNT_UPDATE, ALERT_UPDATE, ISSUE_RESOLUTION...) son los ejemplos que
+     * Gupshup crea solo en el sandbox: no se muestran ni se sincronizan.
+     */
+    public const META_CATEGORIES = ['MARKETING', 'UTILITY', 'AUTHENTICATION'];
+
+    public static function isSampleCategory(string $category): bool
+    {
+        $c = strtoupper(trim($category));
+
+        // Sin categoría: se trata como real (antes se guardaba como MARKETING).
+        return $c !== '' && !in_array($c, self::META_CATEGORIES, true);
+    }
+
     public function templates(?string $status = null): array
     {
-        $sql = 'SELECT * FROM whatsapp_templates';
+        // Las filas de ejemplo del sandbox que ya estuvieran guardadas se
+        // ocultan (no se borran: alguna campaña de prueba puede referirlas).
+        $sql = "SELECT * FROM whatsapp_templates WHERE UPPER(category) IN ('MARKETING','UTILITY','AUTHENTICATION')";
         if ($status !== null) {
-            $sql .= ' WHERE status = :status';
+            $sql .= ' AND status = :status';
         }
         $sql .= ' ORDER BY (status = \'APPROVED\') DESC, updated_at DESC';
         $stmt = $this->pdo->prepare($sql);
