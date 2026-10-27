@@ -253,7 +253,6 @@ El usuario IAM necesita exactamente estas acciones:
 | `ses:VerifyDomainIdentity`, `ses:VerifyDomainDkim`, `ses:VerifyEmailIdentity` | Verificación de dominios y remitentes |
 | `ses:GetIdentityVerificationAttributes`, `ses:GetIdentityDkimAttributes` | Consulta de estado |
 | `ses:ListIdentities`, `ses:DeleteIdentity` | Listado y borrado de identidades |
-| `ses:SetIdentityMailFromDomain`, `ses:GetIdentityMailFromDomainAttributes` | Dominio MAIL FROM (rebotes) en Verificación |
 | `ses:GetSendQuota` | Detección del modo sandbox |
 | `polly:SynthesizeSpeech` | Módulo de Audio (locuciones) |
 

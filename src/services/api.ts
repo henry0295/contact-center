@@ -45,12 +45,6 @@ export interface DomainRow {
   dkim_enabled: boolean;
   dkim_status: string | null;
   dkim_tokens: string[];
-  /** Dominio MAIL FROM personalizado (p.ej. bounce.midominio.com) o null. */
-  mail_from_domain?: string | null;
-  /** Pending | Success | Failed | TemporaryFailure. */
-  mail_from_status?: string | null;
-  /** Servidor MX de SES para el MAIL FROM (según la región). */
-  mail_from_mx?: string;
   created_at: string;
   updated_at: string;
 }
@@ -712,12 +706,6 @@ export function deleteDomain(domain: string): Promise<{ success: boolean; messag
 }
 export function reverifyDomain(domain: string): Promise<VerifyDomainResponse> {
   return request(`/domains/${encodeURIComponent(domain)}/reverify`, { method: 'POST', body: jsonBody({}) });
-}
-export function setMailFromDomain(domain: string, subdomain: string): Promise<{ success: boolean; message: string; mailFromDomain: string; mailFromMx: string }> {
-  return request(`/domains/${encodeURIComponent(domain)}/mail-from`, { method: 'POST', body: jsonBody({ subdomain }) });
-}
-export function disableMailFromDomain(domain: string): Promise<{ success: boolean; message: string }> {
-  return request(`/domains/${encodeURIComponent(domain)}/mail-from`, { method: 'DELETE' });
 }
 export function verifySender(payload: CreateSenderPayload): Promise<VerifySenderResponse> {
   return request('/senders/verify', { method: 'POST', body: jsonBody(payload) });

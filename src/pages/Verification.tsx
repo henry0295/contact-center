@@ -11,8 +11,6 @@ import {
   getSenderStatus,
   deleteDomain,
   reverifyDomain,
-  setMailFromDomain,
-  disableMailFromDomain,
   deleteSender,
   resendSenderVerification,
   listSenders,
@@ -80,7 +78,6 @@ const Verification: React.FC = () => {
   const [settingDefault, setSettingDefault] = useState<string | null>(null);
   const [busyDomain, setBusyDomain] = useState<string | null>(null);
   const [busySender, setBusySender] = useState<string | null>(null);
-  const [mailFromInput, setMailFromInput] = useState<Record<string, string>>({});
   const [freeEmail, setFreeEmail] = useState('');
   const [submittingFreeEmail, setSubmittingFreeEmail] = useState(false);
 
@@ -192,35 +189,6 @@ const Verification: React.FC = () => {
     setBusyDomain(domain);
     try {
       const res = await reverifyDomain(domain);
-      toast.success(res.message);
-      await loadDomains();
-    } catch (err) {
-      toast.error(errorMessage(err));
-    } finally {
-      setBusyDomain(null);
-    }
-  };
-
-  // --- Dominio MAIL FROM personalizado (rebotes) ---
-  const handleSetMailFrom = async (domain: string) => {
-    const sub = (mailFromInput[domain] ?? 'bounce').trim() || 'bounce';
-    setBusyDomain(domain);
-    try {
-      const res = await setMailFromDomain(domain, sub);
-      toast.success(res.message);
-      await loadDomains();
-    } catch (err) {
-      toast.error(errorMessage(err));
-    } finally {
-      setBusyDomain(null);
-    }
-  };
-
-  const handleDisableMailFrom = async (domain: string, mailFrom: string) => {
-    if (!window.confirm(`¿Desactivar el MAIL FROM ${mailFrom}?\n\nLos rebotes volverán a ir a amazonses.com. Puedes borrar después sus registros MX y TXT.`)) return;
-    setBusyDomain(domain);
-    try {
-      const res = await disableMailFromDomain(domain);
       toast.success(res.message);
       await loadDomains();
     } catch (err) {
@@ -573,73 +541,6 @@ const Verification: React.FC = () => {
                             <p className="text-sm text-gray-500">No hay registros DNS disponibles para este dominio.</p>
                           )}
                         </div>
-                      </div>
-
-                      {/* Dominio MAIL FROM personalizado (rebotes / Return-Path) */}
-                      <div className="mt-4 border-t border-gray-100 pt-4">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <h4 className="text-xs font-semibold text-gray-700 uppercase tracking-wide">Dominio MAIL FROM (rebotes)</h4>
-                          {d.mail_from_domain && statusBadge(d.mail_from_status ?? null)}
-                          <span className="text-xs text-gray-500">Opcional, recomendado</span>
-                        </div>
-                        <p className="mt-1 text-xs text-gray-600">
-                          Los rebotes y quejas vuelven a un subdominio tuyo en lugar de amazonses.com. Así el SPF queda
-                          alineado con tu dominio, DMARC pasa por SPF y DKIM, y Gmail/Outlook confían más en tus correos.
-                          Si el MX falta, SES sigue enviando con su MAIL FROM por defecto.
-                        </p>
-                        {d.mail_from_domain ? (
-                          <div className="mt-2 space-y-2">
-                            <div className="bg-gray-50 border border-gray-200 rounded p-3 font-mono text-xs text-gray-800 overflow-x-auto">
-                              <div><span className="text-gray-500">Tipo:</span> MX</div>
-                              <div><span className="text-gray-500">Nombre:</span> {d.mail_from_domain}</div>
-                              <div><span className="text-gray-500">Prioridad:</span> 10</div>
-                              <div><span className="text-gray-500">Valor:</span> {d.mail_from_mx || 'feedback-smtp.us-east-1.amazonses.com'}</div>
-                            </div>
-                            <div className="bg-gray-50 border border-gray-200 rounded p-3 font-mono text-xs text-gray-800 overflow-x-auto">
-                              <div><span className="text-gray-500">Tipo:</span> TXT</div>
-                              <div><span className="text-gray-500">Nombre:</span> {d.mail_from_domain}</div>
-                              <div><span className="text-gray-500">Valor:</span> v=spf1 include:amazonses.com ~all</div>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => handleDisableMailFrom(d.domain, d.mail_from_domain as string)}
-                              disabled={busyDomain === d.domain}
-                              className="inline-flex items-center py-1 px-2.5 border border-gray-300 rounded-md text-xs font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
-                            >
-                              Desactivar MAIL FROM
-                            </button>
-                          </div>
-                        ) : (
-                          <form
-                            className="mt-2 flex flex-wrap items-end gap-2"
-                            onSubmit={(e) => { e.preventDefault(); void handleSetMailFrom(d.domain); }}
-                          >
-                            <div>
-                              <label htmlFor={`mailfrom-${d.id}`} className="block text-xs font-medium text-gray-700">Subdominio</label>
-                              <div className="mt-1 flex items-center rounded-md shadow-sm">
-                                <input
-                                  id={`mailfrom-${d.id}`}
-                                  type="text"
-                                  value={mailFromInput[d.domain] ?? 'bounce'}
-                                  onChange={(e) => setMailFromInput((m) => ({ ...m, [d.domain]: e.target.value }))}
-                                  className="block w-32 sm:text-sm border-gray-300 rounded-l-md focus:ring-blue-500 focus:border-blue-500"
-                                  aria-describedby={`mailfrom-help-${d.id}`}
-                                />
-                                <span className="inline-flex items-center px-2 py-2 border border-l-0 border-gray-300 bg-gray-50 text-gray-600 text-sm rounded-r-md">.{d.domain}</span>
-                              </div>
-                            </div>
-                            <button
-                              type="submit"
-                              disabled={busyDomain === d.domain}
-                              className="inline-flex items-center py-2 px-3 border border-transparent rounded-md text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
-                            >
-                              Activar MAIL FROM
-                            </button>
-                            <p id={`mailfrom-help-${d.id}`} className="w-full text-xs text-gray-500">
-                              Usa un subdominio que no se use para nada más (no envíes ni recibas correo con él).
-                            </p>
-                          </form>
-                        )}
                       </div>
                     </div>
                   ))}

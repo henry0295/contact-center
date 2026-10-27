@@ -86,8 +86,6 @@ $app->group('/api', function ($group) {
         $admin->get('/domains/{domain}/status', 'App\Controllers\DomainVerificationController:checkDomainStatus');
         $admin->post('/domains/{domain}/reverify', 'App\Controllers\DomainVerificationController:reverifyDomain');
         $admin->delete('/domains/{domain}', 'App\Controllers\DomainVerificationController:deleteDomain');
-        $admin->post('/domains/{domain}/mail-from', 'App\Controllers\DomainVerificationController:setMailFrom');
-        $admin->delete('/domains/{domain}/mail-from', 'App\Controllers\DomainVerificationController:disableMailFrom');
 
         $admin->post('/senders/verify', 'App\Controllers\SenderVerificationController:verifySender');
         $admin->get('/senders/{email}/status', 'App\Controllers\SenderVerificationController:checkSenderStatus');

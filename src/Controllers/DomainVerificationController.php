@@ -5,7 +5,6 @@ namespace App\Controllers;
 use App\Repositories\DomainRepository;
 use App\Repositories\SenderRepository;
 use App\Support\Aws;
-use Aws\Exception\AwsException;
 use Aws\Ses\SesClient;
 use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
@@ -159,15 +158,11 @@ class DomainVerificationController
             $dkimStatus = $this->getDkimStatus($domain);
 
             $this->repo->updateStatus($domain, $status, $dkimStatus['status'], (bool) $dkimStatus['enabled']);
-            $this->syncMailFrom([$domain]);
-            $row = $this->localDomain($domain) ?? [];
 
             return $this->jsonResponse($response, [
                 'domain' => $domain,
                 'verificationStatus' => $status,
-                'dkimStatus' => $dkimStatus,
-                'mailFromDomain' => $row['mail_from_domain'] ?? null,
-                'mailFromStatus' => $row['mail_from_status'] ?? null,
+                'dkimStatus' => $dkimStatus
             ]);
 
         } catch (\Exception $e) {
@@ -198,8 +193,6 @@ class DomainVerificationController
                     $verification = $attrs['VerificationAttributes'] ?? [];
                     $dkim = $this->ses()->getIdentityDkimAttributes(['Identities' => $names])['DkimAttributes'] ?? [];
 
-                    $this->syncMailFrom($names);
-
                     foreach ($stored as $row) {
                         $domain = $row['domain'];
                         $status = $verification[$domain]['VerificationStatus'] ?? 'NotFound';
@@ -226,7 +219,7 @@ class DomainVerificationController
         }
 
         return $this->jsonResponse($response, [
-            'domains' => array_map([$this, 'withMailFromMx'], $this->repo->all()),
+            'domains' => $this->repo->all(),
             'synced'  => $synced,
         ]);
     }
@@ -358,125 +351,6 @@ class DomainVerificationController
                 $this->senders->clearDefault($email);
             }
         }
-    }
-
-    /** Servidor MX de SES para el MAIL FROM (depende de la región de la cuenta). */
-    public static function mailFromMx(): string
-    {
-        return 'feedback-smtp.' . Aws::region() . '.amazonses.com';
-    }
-
-    private function withMailFromMx(array $row): array
-    {
-        $row['mail_from_mx'] = self::mailFromMx();
-
-        return $row;
-    }
-
-    private static function isAccessDenied(\Throwable $e): bool
-    {
-        return $e instanceof AwsException
-            && in_array($e->getAwsErrorCode(), ['AccessDenied', 'AccessDeniedException'], true);
-    }
-
-    /**
-     * Copia de SES el dominio MAIL FROM y su estado. SES es la fuente de verdad:
-     * si allí no está configurado, se borra también aquí. Si el usuario IAM no
-     * tiene ses:GetIdentityMailFromDomainAttributes, no se toca nada.
-     */
-    private function syncMailFrom(array $names): void
-    {
-        if (empty($names)) {
-            return;
-        }
-        try {
-            $attrs = $this->ses()->getIdentityMailFromDomainAttributes(['Identities' => array_values($names)])['MailFromDomainAttributes'] ?? [];
-        } catch (\Throwable $e) {
-            return;
-        }
-        foreach ($names as $domain) {
-            $mf = strtolower(trim((string) ($attrs[$domain]['MailFromDomain'] ?? '')));
-            if ($mf === '') {
-                $this->repo->setMailFrom($domain, null, null);
-            } else {
-                $this->repo->setMailFrom($domain, $mf, (string) ($attrs[$domain]['MailFromDomainStatus'] ?? 'Pending'));
-            }
-        }
-    }
-
-    /**
-     * Activa el dominio MAIL FROM personalizado (p.ej. bounce.midominio.com).
-     * Body: { "subdomain": "bounce" }. Si SES no encuentra el MX, sigue usando
-     * su MAIL FROM por defecto (amazonses.com): nunca se dejan de enviar correos.
-     */
-    public function setMailFrom(Request $request, Response $response, array $args): Response
-    {
-        $domain = self::normalizeDomain((string) ($args['domain'] ?? ''));
-        if ($this->localDomain($domain) === null) {
-            return $this->notLocal($response, $domain);
-        }
-        $data = (array) $request->getParsedBody();
-        $sub = strtolower(trim((string) ($data['subdomain'] ?? 'bounce'), " \t\n\r\0\x0B."));
-        if (str_ends_with($sub, '.' . $domain)) {
-            $sub = substr($sub, 0, -strlen('.' . $domain));
-        }
-        $label = '[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?';
-        if (!preg_match('/^' . $label . '(?:\.' . $label . ')*$/', $sub) || in_array($sub, ['www', 'mail', '_dmarc'], true)) {
-            return $this->jsonResponse($response, [
-                'error' => 'Subdominio no válido. Usa uno que no se use para nada más, p.ej. "bounce".',
-            ], 400);
-        }
-        $mailFrom = $sub . '.' . $domain;
-        if (strlen($mailFrom) > 253) {
-            return $this->jsonResponse($response, ['error' => 'El dominio MAIL FROM es demasiado largo.'], 400);
-        }
-
-        try {
-            $this->ses()->setIdentityMailFromDomain([
-                'Identity'            => $domain,
-                'MailFromDomain'      => $mailFrom,
-                'BehaviorOnMXFailure' => 'UseDefaultValue',
-            ]);
-        } catch (\Throwable $e) {
-            return $this->jsonResponse($response, [
-                'error' => self::isAccessDenied($e)
-                    ? 'El usuario de AWS de esta instalación no tiene permiso ses:SetIdentityMailFromDomain. Pide a Vozip que lo agregue a la política ContactCenterSES.'
-                    : 'No se pudo configurar el dominio MAIL FROM en Amazon SES.',
-                'message' => $e->getMessage(),
-            ], self::isAccessDenied($e) ? 403 : 502);
-        }
-
-        $this->repo->setMailFrom($domain, $mailFrom, 'Pending');
-
-        return $this->jsonResponse($response, [
-            'success'        => true,
-            'message'        => 'MAIL FROM configurado. Publica los registros MX y TXT de ' . $mailFrom . ' en tu DNS.',
-            'mailFromDomain' => $mailFrom,
-            'mailFromMx'     => self::mailFromMx(),
-        ]);
-    }
-
-    /** Desactiva el MAIL FROM personalizado: SES vuelve a usar amazonses.com. */
-    public function disableMailFrom(Request $request, Response $response, array $args): Response
-    {
-        $domain = self::normalizeDomain((string) ($args['domain'] ?? ''));
-        if ($this->localDomain($domain) === null) {
-            return $this->notLocal($response, $domain);
-        }
-        try {
-            // Sin MailFromDomain, SES quita el dominio personalizado.
-            $this->ses()->setIdentityMailFromDomain(['Identity' => $domain]);
-        } catch (\Throwable $e) {
-            return $this->jsonResponse($response, [
-                'error' => self::isAccessDenied($e)
-                    ? 'El usuario de AWS de esta instalación no tiene permiso ses:SetIdentityMailFromDomain.'
-                    : 'No se pudo desactivar el dominio MAIL FROM en Amazon SES.',
-                'message' => $e->getMessage(),
-            ], self::isAccessDenied($e) ? 403 : 502);
-        }
-        $this->repo->setMailFrom($domain, null, null);
-
-        return $this->jsonResponse($response, ['success' => true, 'message' => 'MAIL FROM personalizado desactivado.']);
     }
 
     private function getDkimStatus(string $domain): array
