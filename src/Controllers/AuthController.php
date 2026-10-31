@@ -112,6 +112,12 @@ class AuthController
     public function me(Request $request, Response $response): Response
     {
         $user = $request->getAttribute('user');
+        // Nombre y email desde la BD: pudieron editarse después de emitir el token.
+        $row = isset($user['id']) ? $this->users->findById((int) $user['id']) : null;
+        if ($row !== null) {
+            $user['name'] = $row['name'];
+            $user['email'] = $row['email'];
+        }
 
         return $this->jsonResponse($response, ['user' => $user]);
     }

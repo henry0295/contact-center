@@ -35,6 +35,17 @@ class SenderRepository
         $stmt->execute();
     }
 
+    /** Nombre visible en el buzón del destinatario (null = el del .env). */
+    public function setDisplayName(string $email, ?string $name): bool
+    {
+        $stmt = $this->pdo->prepare('UPDATE senders SET display_name = :name WHERE email = :email');
+        $stmt->bindValue(':name', $name, $name === null ? PDO::PARAM_NULL : PDO::PARAM_STR);
+        $stmt->bindValue(':email', $email, PDO::PARAM_STR);
+        $stmt->execute();
+
+        return $stmt->rowCount() > 0 || $this->findByEmail($email) !== null;
+    }
+
     public function updateStatus(string $email, string $verificationStatus): void
     {
         $stmt = $this->pdo->prepare('UPDATE senders SET verification_status = :status WHERE email = :email');

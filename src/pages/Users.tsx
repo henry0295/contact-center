@@ -1,11 +1,14 @@
 import React, { useEffect, useState } from 'react';
-import { UserPlus, Trash2, Users as UsersIcon, Shield, KeyRound } from 'lucide-react';
+import { UserPlus, Trash2, Users as UsersIcon, Shield, KeyRound, Pencil, Check, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as api from '../services/api';
 import { useUser } from '../context/UserContext';
 
 const Users: React.FC = () => {
-  const { user: current } = useUser();
+  const { user: current, updateCurrentUser } = useUser();
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [edit, setEdit] = useState({ name: '', email: '', role: 'operator' });
+  const [savingEdit, setSavingEdit] = useState(false);
   const [users, setUsers] = useState<api.AuthUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -61,6 +64,32 @@ const Users: React.FC = () => {
     }
   };
 
+  const startEdit = (u: api.AuthUser) => {
+    setEditingId(u.id);
+    setEdit({ name: u.name, email: u.email, role: u.role });
+  };
+
+  const handleSaveEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (editingId === null) return;
+    if (!edit.name.trim() || !edit.email.trim()) {
+      toast.error('Nombre y email son obligatorios');
+      return;
+    }
+    setSavingEdit(true);
+    try {
+      const res = await api.updateUser(editingId, { name: edit.name.trim(), email: edit.email.trim(), role: edit.role });
+      toast.success(res.message);
+      if (current?.id === editingId) updateCurrentUser(res.user);
+      setEditingId(null);
+      load();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Error al editar el usuario');
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
   const handleDelete = async (id: number, email: string) => {
     if (!window.confirm(`¿Eliminar al usuario ${email}?`)) return;
     try {
@@ -77,7 +106,7 @@ const Users: React.FC = () => {
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Usuarios</h1>
         <p className="mt-1 text-sm text-gray-500">
-          Crea y elimina los usuarios con acceso a la plataforma.
+          Crea, edita y elimina los usuarios con acceso a la plataforma.
         </p>
       </div>
 
@@ -150,7 +179,58 @@ const Users: React.FC = () => {
               ) : users.length === 0 ? (
                 <tr><td colSpan={4} className="px-6 py-10 text-center text-sm text-gray-500">No hay usuarios.</td></tr>
               ) : (
-                users.map((u) => (
+                users.map((u) => editingId === u.id ? (
+                  <tr key={u.id} className="bg-blue-50">
+                    <td colSpan={4} className="px-6 py-3">
+                      <form onSubmit={handleSaveEdit} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 items-center">
+                        <input
+                          type="text"
+                          aria-label="Nombre"
+                          value={edit.name}
+                          onChange={(e) => setEdit({ ...edit, name: e.target.value })}
+                          maxLength={120}
+                          className="shadow-sm focus:ring-blue-500 focus:border-blue-500 block w-full sm:text-sm border-gray-300 rounded-md border px-3 py-2"
+                        />
+                        <input
+                          type="email"
+                          aria-label="Email"
+                          value={edit.email}
+                          onChange={(e) => setEdit({ ...edit, email: e.target.value })}
+                          className="shadow-sm focus:ring-blue-500 focus:border-blue-500 block w-full sm:text-sm border-gray-300 rounded-md border px-3 py-2"
+                        />
+                        <select
+                          aria-label="Rol"
+                          value={edit.role}
+                          disabled={current?.id === u.id}
+                          title={current?.id === u.id ? 'No puedes cambiar tu propio rol' : undefined}
+                          onChange={(e) => setEdit({ ...edit, role: e.target.value })}
+                          className="shadow-sm focus:ring-blue-500 focus:border-blue-500 block w-full sm:text-sm border-gray-300 rounded-md border px-3 py-2 disabled:bg-gray-100"
+                        >
+                          <option value="operator">Operador (envía y consulta)</option>
+                          <option value="admin">Administrador (todo)</option>
+                        </select>
+                        <div className="flex items-center justify-end gap-2">
+                          <button
+                            type="submit"
+                            disabled={savingEdit}
+                            className="inline-flex items-center py-2 px-3 border border-transparent rounded-md text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50"
+                          >
+                            <Check className="mr-1 h-4 w-4" />
+                            {savingEdit ? 'Guardando...' : 'Guardar'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setEditingId(null)}
+                            className="inline-flex items-center py-2 px-3 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50"
+                          >
+                            <X className="mr-1 h-4 w-4" />
+                            Cancelar
+                          </button>
+                        </div>
+                      </form>
+                    </td>
+                  </tr>
+                ) : (
                   <tr key={u.id} className="hover:bg-gray-50">
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{u.name}</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{u.email}</td>
@@ -162,6 +242,14 @@ const Users: React.FC = () => {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                       <div className="inline-flex items-center gap-3">
+                        <button
+                          onClick={() => startEdit(u)}
+                          className="inline-flex items-center text-blue-600 hover:text-blue-900"
+                          title="Editar nombre, email y rol"
+                        >
+                          <Pencil className="mr-1 h-4 w-4" />
+                          Editar
+                        </button>
                         <button
                           onClick={() => handleReset(u)}
                           className="inline-flex items-center text-blue-600 hover:text-blue-900"

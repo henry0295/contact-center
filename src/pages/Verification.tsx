@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ShieldCheck, Globe, Mail, Reply, RefreshCw, Star, AlertCircle, Trash2, RotateCcw, Send, FileText, FileSpreadsheet } from 'lucide-react';
+import { ShieldCheck, Globe, Mail, Reply, RefreshCw, Star, AlertCircle, Trash2, RotateCcw, Send, FileText, FileSpreadsheet, Pencil } from 'lucide-react';
 import { downloadDnsExcel, downloadDnsPdf } from '../utils/dnsExport';
 import toast from 'react-hot-toast';
 import { useSesData } from '../context/SesDataContext';
@@ -12,6 +12,7 @@ import {
   deleteDomain,
   reverifyDomain,
   deleteSender,
+  setSenderName,
   resendSenderVerification,
   listSenders,
   type SenderRow,
@@ -78,6 +79,9 @@ const Verification: React.FC = () => {
   const [settingDefault, setSettingDefault] = useState<string | null>(null);
   const [busyDomain, setBusyDomain] = useState<string | null>(null);
   const [busySender, setBusySender] = useState<string | null>(null);
+  const [newSenderName, setNewSenderName] = useState('');
+  const [editingNameFor, setEditingNameFor] = useState<string | null>(null);
+  const [editingNameValue, setEditingNameValue] = useState('');
 
   const previewEmail = localPart.trim() && selectedDomain
     ? `${localPart.trim()}@${selectedDomain}`
@@ -141,9 +145,10 @@ const Verification: React.FC = () => {
     }
     setSubmittingSender(true);
     try {
-      const res = await verifySender({ localPart: local, domain: selectedDomain, setAsDefault: true });
+      const res = await verifySender({ localPart: local, domain: selectedDomain, setAsDefault: true, displayName: newSenderName.trim() });
       toast.success(res.message);
       setLocalPart('');
+      setNewSenderName('');
       await loadSenders();
     } catch (err) {
       toast.error(errorMessage(err));
@@ -193,6 +198,20 @@ const Verification: React.FC = () => {
       toast.error(errorMessage(err));
     } finally {
       setBusyDomain(null);
+    }
+  };
+
+  const handleSaveSenderName = async (email: string) => {
+    setBusySender(email);
+    try {
+      const res = await setSenderName(email, editingNameValue.trim());
+      toast.success(res.message);
+      setEditingNameFor(null);
+      await loadSenders();
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setBusySender(null);
     }
   };
 
@@ -571,10 +590,28 @@ const Verification: React.FC = () => {
                       {submittingSender ? 'Creando...' : 'Crear remitente'}
                     </button>
                   </div>
+                  <div>
+                    <label htmlFor="newSenderName" className="block text-xs font-medium text-gray-700">
+                      Nombre visible en el buzón (opcional)
+                    </label>
+                    <input
+                      id="newSenderName"
+                      type="text"
+                      value={newSenderName}
+                      onChange={(e) => setNewSenderName(e.target.value)}
+                      maxLength={100}
+                      className="mt-1 shadow-sm focus:ring-blue-500 focus:border-blue-500 block w-full sm:w-80 sm:text-sm border-gray-300 rounded-md border px-3 py-2"
+                      placeholder="UNICUCES"
+                    />
+                  </div>
                   {previewEmail && (
                     <p className="text-xs text-gray-500">
                       Se creará <span className="font-mono text-gray-700">{previewEmail}</span> y quedará como
                       remitente por defecto (MAIL_FROM) de los envíos.
+                      {newSenderName.trim() && (
+                        <> En el buzón aparecerá como <strong className="text-gray-700">{newSenderName.trim()}</strong>{' '}
+                          <span className="font-mono">&lt;{previewEmail}&gt;</span>.</>
+                      )}
                     </p>
                   )}
                 </form>
@@ -588,14 +625,66 @@ const Verification: React.FC = () => {
                 <div className="border border-gray-200 rounded-md divide-y divide-gray-200">
                   {senders.map((s) => (
                     <div key={s.id} className="p-4 flex items-center justify-between flex-wrap gap-2">
-                      <div className="flex items-center gap-3 flex-wrap">
-                        <span className="text-sm font-medium text-gray-900">{s.email}</span>
-                        {statusBadge(s.verification_status)}
-                        {s.is_default && (
-                          <span className="inline-flex items-center px-2 py-1 text-xs font-medium rounded-full bg-blue-100 text-blue-800">
-                            <Star className="h-3 w-3 mr-1 fill-current" />
-                            Remitente por defecto
-                          </span>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-3 flex-wrap">
+                          <span className="text-sm font-medium text-gray-900">{s.email}</span>
+                          {statusBadge(s.verification_status)}
+                          {s.is_default && (
+                            <span className="inline-flex items-center px-2 py-1 text-xs font-medium rounded-full bg-blue-100 text-blue-800">
+                              <Star className="h-3 w-3 mr-1 fill-current" />
+                              Remitente por defecto
+                            </span>
+                          )}
+                        </div>
+                        {editingNameFor === s.email ? (
+                          <form
+                            className="mt-2 flex flex-wrap items-center gap-2"
+                            onSubmit={(e) => { e.preventDefault(); void handleSaveSenderName(s.email); }}
+                          >
+                            <input
+                              type="text"
+                              aria-label={`Nombre visible de ${s.email}`}
+                              value={editingNameValue}
+                              onChange={(e) => setEditingNameValue(e.target.value)}
+                              maxLength={100}
+                              autoFocus
+                              placeholder="UNICUCES"
+                              className="shadow-sm focus:ring-blue-500 focus:border-blue-500 block w-64 sm:text-sm border-gray-300 rounded-md border px-3 py-1.5"
+                            />
+                            <button
+                              type="submit"
+                              disabled={busySender === s.email}
+                              className="inline-flex items-center py-1.5 px-3 border border-transparent rounded-md text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50"
+                            >
+                              Guardar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setEditingNameFor(null)}
+                              className="inline-flex items-center py-1.5 px-3 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50"
+                            >
+                              Cancelar
+                            </button>
+                            <span className="w-full text-xs text-gray-500">Déjalo vacío para usar el nombre por defecto.</span>
+                          </form>
+                        ) : (
+                          <div className="mt-1 flex items-center gap-2 text-xs text-gray-600">
+                            <span>
+                              En el buzón aparece como:{' '}
+                              {s.display_name
+                                ? <strong className="text-gray-800">{s.display_name}</strong>
+                                : <span className="italic text-gray-500">nombre por defecto</span>}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => { setEditingNameFor(s.email); setEditingNameValue(s.display_name ?? ''); }}
+                              className="inline-flex items-center text-blue-600 hover:text-blue-800"
+                              aria-label={`Editar el nombre visible de ${s.email}`}
+                            >
+                              <Pencil className="mr-1 h-3.5 w-3.5" />
+                              {s.display_name ? 'Cambiar' : 'Poner nombre'}
+                            </button>
+                          </div>
                         )}
                       </div>
                       <div className="flex items-center gap-2">

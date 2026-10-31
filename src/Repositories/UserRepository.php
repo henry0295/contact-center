@@ -71,6 +71,26 @@ class UserRepository
         $stmt->execute();
     }
 
+    /** Actualiza nombre, email y rol (la contraseña va aparte). */
+    public function update(int $id, string $name, string $email, string $role): void
+    {
+        $stmt = $this->pdo->prepare('UPDATE users SET name = :name, email = :email, role = :role WHERE id = :id');
+        $stmt->bindValue(':name', $name, PDO::PARAM_STR);
+        $stmt->bindValue(':email', $email, PDO::PARAM_STR);
+        $stmt->bindValue(':role', $role, PDO::PARAM_STR);
+        $stmt->bindValue(':id', $id, PDO::PARAM_INT);
+        $stmt->execute();
+    }
+
+    public function countByRole(string $role): int
+    {
+        $stmt = $this->pdo->prepare('SELECT COUNT(*) FROM users WHERE role = :role');
+        $stmt->bindValue(':role', $role, PDO::PARAM_STR);
+        $stmt->execute();
+
+        return (int) $stmt->fetchColumn();
+    }
+
     public function updatePassword(int $id, string $passwordHash): bool
     {
         $stmt = $this->pdo->prepare('UPDATE users SET password_hash = :hash WHERE id = :id');

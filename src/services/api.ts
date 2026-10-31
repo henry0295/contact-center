@@ -57,6 +57,8 @@ export interface SenderRow {
   is_default: boolean;
   /** 'sender' (aparece en "De") o 'reply' (recibe las respuestas vía Reply-To). */
   type: 'sender' | 'reply';
+  /** Nombre que ve el destinatario en su buzón (null = nombre por defecto). */
+  display_name?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -91,6 +93,8 @@ export interface CreateSenderPayload {
   domain?: string;
   email?: string;
   setAsDefault?: boolean;
+  /** Nombre visible en el buzón del destinatario (p.ej. "UNICUCES"). */
+  displayName?: string;
   /** 'sender' (por defecto) o 'reply'. */
   type?: 'sender' | 'reply';
 }
@@ -681,6 +685,9 @@ export function resetUserPassword(id: number, newPassword: string): Promise<{ su
 export function createUser(payload: { name: string; email: string; password: string; role?: string }): Promise<{ success: boolean; user: AuthUser }> {
   return request('/users', { method: 'POST', body: jsonBody(payload) });
 }
+export function updateUser(id: number, payload: { name: string; email: string; role: string }): Promise<{ success: boolean; message: string; user: AuthUser }> {
+  return request(`/users/${id}`, { method: 'PUT', body: jsonBody(payload) });
+}
 export function deleteUser(id: number): Promise<{ success: boolean }> {
   return request(`/users/${id}`, { method: 'DELETE' });
 }
@@ -712,6 +719,10 @@ export function verifySender(payload: CreateSenderPayload): Promise<VerifySender
 }
 
 /** Marca un remitente existente como el remitente por defecto (MAIL_FROM). */
+/** Nombre visible del remitente en el buzón del destinatario ("" lo quita). */
+export function setSenderName(email: string, displayName: string): Promise<{ success: boolean; message: string; displayName: string | null }> {
+  return request(`/senders/${encodeURIComponent(email)}/name`, { method: 'PUT', body: jsonBody({ displayName }) });
+}
 export function setDefaultSender(email: string): Promise<{ success: boolean; message: string; email: string; verified: boolean }> {
   return request('/senders/default', { method: 'POST', body: jsonBody({ email }) });
 }

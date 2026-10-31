@@ -14,6 +14,8 @@ interface UserContextType {
   login: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   changePassword: (current: string, next: string) => Promise<string>;
+  /** Refresca los datos propios tras editarlos (nombre/email). */
+  updateCurrentUser: (u: User) => void;
   isAuthenticated: boolean;
   /** true si el usuario tiene rol de administrador. */
   isAdmin: boolean;
@@ -103,15 +105,21 @@ export const UserProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return res.message ?? 'Contraseña actualizada.';
   }, []);
 
+  const updateCurrentUser = useCallback((u: User) => {
+    localStorage.setItem(USER_KEY, JSON.stringify(u));
+    setUser(u);
+  }, []);
+
   const value = useMemo<UserContextType>(() => ({
     user,
     loading,
     login,
     logout,
     changePassword,
+    updateCurrentUser,
     isAuthenticated: !!user,
     isAdmin: user?.role === 'admin',
-  }), [user, loading, login, logout, changePassword]);
+  }), [user, loading, login, logout, changePassword, updateCurrentUser]);
 
   return <UserContext.Provider value={value}>{children}</UserContext.Provider>;
 };

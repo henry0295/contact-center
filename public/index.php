@@ -79,6 +79,7 @@ $app->group('/api', function ($group) {
     $group->group('', function ($admin) {
         $admin->get('/users', 'App\Controllers\UserController:index');
         $admin->post('/users', 'App\Controllers\UserController:create');
+        $admin->put('/users/{id}', 'App\Controllers\UserController:update');
         $admin->delete('/users/{id}', 'App\Controllers\UserController:delete');
         $admin->post('/users/{id}/reset-password', 'App\Controllers\UserController:resetPassword');
 
@@ -90,6 +91,7 @@ $app->group('/api', function ($group) {
         $admin->post('/senders/verify', 'App\Controllers\SenderVerificationController:verifySender');
         $admin->get('/senders/{email}/status', 'App\Controllers\SenderVerificationController:checkSenderStatus');
         $admin->post('/senders/default', 'App\Controllers\SenderVerificationController:setDefaultSender');
+        $admin->put('/senders/{email}/name', 'App\Controllers\SenderVerificationController:setSenderName');
         $admin->post('/senders/{email}/resend', 'App\Controllers\SenderVerificationController:resendSenderVerification');
         $admin->delete('/senders/{email}', 'App\Controllers\SenderVerificationController:deleteSender');
 

@@ -79,6 +79,11 @@ class SenderVerificationController
             return $this->jsonResponse($response, ['error' => 'Se requiere un correo de remitente válido'], 400);
         }
 
+        [$nameError, $displayName] = self::parseDisplayName($data['displayName'] ?? null);
+        if ($nameError !== null) {
+            return $this->jsonResponse($response, ['error' => $nameError], 400);
+        }
+
         $existing = $this->repo->findByEmail($email);
         if ($existing !== null && ($existing['type'] ?? 'sender') !== $type) {
             return $this->jsonResponse($response, [
@@ -146,6 +151,10 @@ class SenderVerificationController
                 $message = 'El dominio no está verificado todavía, así que se envió un correo de confirmación a ' . $email . '.';
             }
 
+                if (array_key_exists('displayName', $data)) {
+                $this->repo->setDisplayName($email, $displayName);
+            }
+
             // Remitente por defecto (MAIL_FROM, o Reply-To si es tipo 'reply'):
             // explícito o el primero de su tipo que exista.
             $setAsDefault = !empty($data['setAsDefault']) || !$this->repo->hasDefault($type);
@@ -167,6 +176,56 @@ class SenderVerificationController
                 'message' => $e->getMessage(),
             ], 500);
         }
+    }
+
+    /**
+     * Valida el nombre visible ("UNICUCES"). Vacío = sin nombre propio (se usa
+     * MAIL_FROM_NAME). Sin saltos de línea (inyección de cabeceras) ni < > @,
+     * para que no parezca otra dirección de correo.
+     *
+     * @return array{0:?string,1:?string} [error, nombre]
+     */
+    private static function parseDisplayName(mixed $raw): array
+    {
+        if ($raw === null) {
+            return [null, null];
+        }
+        $name = trim(preg_replace('/\s+/u', ' ', (string) $raw) ?? '');
+        if ($name === '') {
+            return [null, null];
+        }
+        if (mb_strlen($name) > 100) {
+            return ['El nombre visible admite máximo 100 caracteres.', null];
+        }
+        if (preg_match('/[<>@"\\\\\p{Cc}]/u', $name)) {
+            return ['El nombre visible no puede llevar < > @ " ni \\.', null];
+        }
+
+        return [null, $name];
+    }
+
+    /** Cambia el nombre visible de un remitente. body: {displayName} ("" lo quita). */
+    public function setSenderName(Request $request, Response $response, array $args): Response
+    {
+        $email = (string) ($args['email'] ?? '');
+        $sender = $this->repo->findByEmail($email);
+        if ($sender === null || ($sender['type'] ?? 'sender') !== 'sender') {
+            return $this->jsonResponse($response, ['error' => 'Remitente no encontrado'], 404);
+        }
+        $data = (array) ($request->getParsedBody() ?? []);
+        [$error, $name] = self::parseDisplayName($data['displayName'] ?? '');
+        if ($error !== null) {
+            return $this->jsonResponse($response, ['error' => $error], 400);
+        }
+        $this->repo->setDisplayName($sender['email'], $name);
+
+        return $this->jsonResponse($response, [
+            'success'     => true,
+            'message'     => $name !== null
+                ? 'Los destinatarios verán "' . $name . '" como remitente.'
+                : 'Nombre visible quitado: se usará el nombre por defecto.',
+            'displayName' => $name,
+        ]);
     }
 
     /** Marca un remitente existente como el remitente por defecto (MAIL_FROM). */

@@ -88,6 +88,27 @@ class EmailService
     }
 
     /**
+     * Nombre que ve el destinatario en su buzón ("UNICUCES" en lugar de
+     * info@...): el nombre visible del remitente configurado en Verificación;
+     * si no tiene, MAIL_FROM_NAME del .env.
+     */
+    public function resolveFromName(string $from): string
+    {
+        try {
+            $repo = $this->senders ?? new SenderRepository();
+            $row = $repo->findByEmail($from);
+            $name = trim((string) ($row['display_name'] ?? ''));
+            if ($name !== '') {
+                return $name;
+            }
+        } catch (\Throwable $e) {
+            // Sin BD se usa el nombre del .env.
+        }
+
+        return trim((string) ($_ENV['MAIL_FROM_NAME'] ?? ''), " \"'");
+    }
+
+    /**
      * Dirección a la que deben ir las respuestas (cabecera Reply-To), si hay
      * una configurada. A diferencia del remitente, es opcional: sin ella las
      * respuestas simplemente van a la dirección de "De" (el comportamiento
@@ -205,8 +226,7 @@ class EmailService
         $mail->CharSet = PHPMailer::CHARSET_UTF8;
         $mail->Encoding = PHPMailer::ENCODING_BASE64;
 
-        $fromName = $_ENV['MAIL_FROM_NAME'] ?? '';
-        $mail->setFrom($from, $fromName);
+        $mail->setFrom($from, $this->resolveFromName($from));
         $mail->addAddress($to);
 
         if ($replyTo !== null && $replyTo !== '') {

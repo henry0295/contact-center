@@ -43,6 +43,8 @@ ALTER TABLE `senders` ADD COLUMN IF NOT EXISTS `is_default` TINYINT(1) NOT NULL 
 -- hacen 360NRS/Brevo con "Email remitente" vs "Email de respuesta".
 ALTER TABLE `senders` ADD COLUMN IF NOT EXISTS `type` VARCHAR(16) NOT NULL DEFAULT 'sender';
 ALTER TABLE `senders` ADD INDEX IF NOT EXISTS `idx_senders_type` (`type`);
+-- Nombre que ve el destinatario en su buzón ("UNICUCES" <info@...>). NULL = MAIL_FROM_NAME del .env.
+ALTER TABLE `senders` ADD COLUMN IF NOT EXISTS `display_name` VARCHAR(100) NULL;
 
 -- =====================================================================
 -- Plataforma completa: usuarios (auth), contactos/listas, plantillas,
