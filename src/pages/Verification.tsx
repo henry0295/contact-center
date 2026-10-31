@@ -78,8 +78,6 @@ const Verification: React.FC = () => {
   const [settingDefault, setSettingDefault] = useState<string | null>(null);
   const [busyDomain, setBusyDomain] = useState<string | null>(null);
   const [busySender, setBusySender] = useState<string | null>(null);
-  const [freeEmail, setFreeEmail] = useState('');
-  const [submittingFreeEmail, setSubmittingFreeEmail] = useState(false);
 
   const previewEmail = localPart.trim() && selectedDomain
     ? `${localPart.trim()}@${selectedDomain}`
@@ -229,28 +227,6 @@ const Verification: React.FC = () => {
       toast.error(errorMessage(err));
     } finally {
       setBusySender(null);
-    }
-  };
-
-  const handleVerifyEmailAddress = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const email = freeEmail.trim();
-    if (!email) {
-      toast.error('Ingresa un correo.');
-      return;
-    }
-    setSubmittingFreeEmail(true);
-    try {
-      // setAsDefault: false → verificar un correo externo no debe robarle el
-      // rol de remitente por defecto al remitente real.
-      const res = await verifySender({ email, setAsDefault: false });
-      toast.success(res.message);
-      setFreeEmail('');
-      await loadSenders();
-    } catch (err) {
-      toast.error(errorMessage(err));
-    } finally {
-      setSubmittingFreeEmail(false);
     }
   };
 
@@ -603,36 +579,6 @@ const Verification: React.FC = () => {
                   )}
                 </form>
               )}
-
-              <form onSubmit={handleVerifyEmailAddress} className="space-y-2 border-t border-gray-200 pt-6">
-                <label htmlFor="freeEmail" className="block text-sm font-medium text-gray-700">
-                  Verificar un correo suelto
-                </label>
-                <p className="text-xs text-gray-500">
-                  Para cualquier dirección, aunque no sea de un dominio tuyo. Se le envía un correo de
-                  confirmación que su dueño debe aceptar. Necesario si tu cuenta de SES está en{' '}
-                  <strong>sandbox</strong>, porque ahí también los <strong>destinatarios</strong> deben
-                  estar verificados.
-                </p>
-                <div className="flex flex-col sm:flex-row gap-3">
-                  <input
-                    type="email"
-                    id="freeEmail"
-                    value={freeEmail}
-                    onChange={(e) => setFreeEmail(e.target.value)}
-                    className="shadow-sm focus:ring-blue-500 focus:border-blue-500 block w-full sm:flex-1 sm:text-sm border-gray-300 rounded-md border px-3 py-2"
-                    placeholder="destinatario@otrodominio.com"
-                  />
-                  <button
-                    type="submit"
-                    disabled={submittingFreeEmail}
-                    className="shrink-0 inline-flex justify-center items-center py-2 px-4 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
-                  >
-                    <Send className="-ml-1 mr-2 h-4 w-4" />
-                    {submittingFreeEmail ? 'Enviando...' : 'Enviar verificación'}
-                  </button>
-                </div>
-              </form>
 
               {loadingSenders ? (
                 <p className="text-sm text-gray-500">Cargando remitentes...</p>

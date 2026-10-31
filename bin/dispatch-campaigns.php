@@ -27,8 +27,8 @@ use App\Repositories\SessionRepository;
 use App\Service\CampaignService;
 use App\Support\Logger;
 
-// Sin límite de tiempo: una campaña grande tarda ~1 s por destinatario por el
-// límite de envíos por segundo de SES.
+// Sin límite de tiempo: una campaña grande puede tardar (límite de envíos por
+// segundo de SES: 14/s en la cuenta de Vozip; el cliente AWS frena solo).
 @set_time_limit(0);
 
 $dotenv = Dotenv\Dotenv::createImmutable(__DIR__ . '/..');

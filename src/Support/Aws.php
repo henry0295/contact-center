@@ -33,7 +33,7 @@ class Aws
      *
      * El modo de reintentos "adaptive" añade limitación de velocidad en el
      * propio cliente: es lo que recomienda AWS para no chocar con el límite de
-     * envíos por segundo de SES (1/s en cuentas en sandbox) durante los envíos
+     * envíos por segundo de SES (14/s en la cuenta de Vozip) durante los envíos
      * masivos. Sin esto, un bucle de envíos devolvía errores de throttling.
      */
     public static function clientConfig(): array

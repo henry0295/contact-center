@@ -767,7 +767,7 @@ Crea claves permanentes (`AKIA...`) y ponlas en `AWS_ACCESS_KEY_ID` / `AWS_SECRE
 
 1. Módulo **Verificación** de la app: verifica el dominio y crea en tu DNS los registros TXT y DKIM (CNAME) que muestra.
 2. Crea el remitente (y el de respuesta/Reply-To si lo usas) sobre el dominio verificado y márcalo como predeterminado; tiene prioridad sobre `MAIL_FROM`.
-3. **Salir del sandbox:** consola SES (región de `AWS_REGION`) → *Account dashboard* → *Request production access*.
+3. **Producción:** la cuenta de SES de Vozip ya está fuera del sandbox en **us-east-1** (N. Virginia): 50.000 correos/día, 14/s, a cualquier destinatario sin verificarlo. Deja `AWS_REGION=us-east-1`; en otra región la cuenta sigue en sandbox y habría que pedir producción allí (*Account dashboard* → *Request production access*).
 
 ### 13.3 Estados de entrega: entregas, rebotes y rechazos
 
@@ -1014,7 +1014,7 @@ sudo systemctl reload php-fpm && sudo systemctl start contact-center-dispatch.ti
 | **401** justo tras iniciar sesión o sesiones que caducan antes | Zona horaria distinta entre PHP y MariaDB o reloj sin sincronizar (§2.6). Cambiar `JWT_SECRET` invalida todas las sesiones. |
 | **429** en el login | 5 fallos por cuenta / 20 por IP en 15 min. |
 | Campañas programadas no salen o salen a otra hora | Timer inactivo (`systemctl list-timers`) o zona horaria (§2.6). |
-| Email rechazado por sandbox o identidad no verificada | SES en sandbox o remitente sin verificar en la región de `AWS_REGION` (§13.2). |
+| Email rechazado: *Email address is not verified* | Remitente (o su dominio) sin verificar en la región de `AWS_REGION`, o `AWS_REGION` distinta de us-east-1 (§13.2). |
 | El certificado caducó | `certbot-renew.timer` no habilitado (§11). |
 | Las imágenes no se ven en los correos | `APP_URL` no es la URL pública HTTPS o `/uploads/` no está mapeado (§9). |
 

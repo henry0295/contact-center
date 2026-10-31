@@ -7,6 +7,7 @@ use App\Service\LinkChecker;
 use App\Service\LinkCheckException;
 use App\Service\SendOrchestrator;
 use App\Support\Attachments;
+use App\Support\Aws;
 use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 
@@ -226,19 +227,37 @@ class EmailController
     }
 
     /**
-     * Traduce los errores típicos de SES a algo accionable. El caso más común en
-     * cuentas nuevas es el sandbox: solo se puede enviar a identidades verificadas.
+     * Traduce los errores típicos de SES a algo accionable. La cuenta ya está
+     * en producción (fuera del sandbox): los destinatarios NO necesitan estar
+     * verificados. "not verified" significa que el REMITENTE (o su dominio) no
+     * está verificado en la región de AWS_REGION.
      */
     private function friendlyError(\Throwable $e): string
     {
         $raw = $e->getMessage();
 
-        if (stripos($raw, 'not verified') !== false || stripos($raw, 'MessageRejected') !== false) {
-            return 'El destinatario no está verificado en Amazon SES. Tu cuenta está en modo '
-                . 'sandbox, así que solo puedes enviar a direcciones o dominios verificados. '
-                . 'Verifica el correo del destinatario en el módulo de Verificación, o solicita '
-                . 'el acceso de producción en SES para enviar a cualquier dirección. '
-                . '(Detalle de AWS: ' . $raw . ')';
+        if (stripos($raw, 'not verified') !== false) {
+            $region = strtolower(Aws::region());
+            $who = '';
+            if (preg_match('/failed the check in region ([A-Z0-9\-]+):\s*(.+?)(?:\s*\(|$)/i', $raw, $m)) {
+                $region = strtolower($m[1]);
+                $who = trim($m[2], " .");
+            }
+
+            return 'Amazon SES rechazó el envío porque el remitente ' . ($who !== '' ? $who . ' ' : '')
+                . 'no está verificado en la región ' . $region . '. Verifica su dominio o el correo '
+                . 'en el módulo de Verificación (y que AWS_REGION sea la región donde está verificado). '
+                . 'Los destinatarios no necesitan verificación. (Detalle de AWS: ' . $raw . ')';
+        }
+
+        if (stripos($raw, 'Maximum sending rate exceeded') !== false || stripos($raw, 'Daily message quota exceeded') !== false) {
+            return 'Se alcanzó el límite de envío de Amazon SES (por segundo o diario). Espera e '
+                . 'inténtalo de nuevo; si pasa seguido, pide a Vozip ampliar la cuota. (Detalle de AWS: ' . $raw . ')';
+        }
+
+        if (stripos($raw, 'Account is paused') !== false || stripos($raw, 'sending paused') !== false) {
+            return 'Amazon SES tiene pausado el envío de la cuenta (normalmente por rebotes o quejas altos). '
+                . 'Avisa a Vozip. (Detalle de AWS: ' . $raw . ')';
         }
 
         if (stripos($raw, 'Message too long') !== false || stripos($raw, 'exceeds the limit') !== false) {

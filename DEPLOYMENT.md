@@ -123,7 +123,7 @@ En un entorno de producción real sirve la aplicación por HTTPS: configura un V
 
 ## 8. Amazon SES: nota de sandbox
 
-Una cuenta SES nueva está en **sandbox**: solo permite enviar a identidades verificadas y requiere salir del sandbox mediante una solicitud a soporte de AWS. La verificación de dominios y remitentes funciona en sandbox, pero el envío real a terceros requiere solicitar el acceso de producción en SES.
+La cuenta SES de Vozip ya está en **producción en us-east-1** (50.000 correos/día, 14/s): se envía a cualquier destinatario sin verificarlo; solo el remitente (o su dominio) debe estar verificado. En cualquier otra región la cuenta sigue en sandbox (solo destinatarios verificados, 1/s), así que usa `AWS_REGION=us-east-1`.
 
 Los **SMS** salen por IT Cloud Services con la cuenta de cada cliente (ver `bin/sms-setup.php`).
 
@@ -253,7 +253,7 @@ El usuario IAM necesita exactamente estas acciones:
 | `ses:VerifyDomainIdentity`, `ses:VerifyDomainDkim`, `ses:VerifyEmailIdentity` | Verificación de dominios y remitentes |
 | `ses:GetIdentityVerificationAttributes`, `ses:GetIdentityDkimAttributes` | Consulta de estado |
 | `ses:ListIdentities`, `ses:DeleteIdentity` | Listado y borrado de identidades |
-| `ses:GetSendQuota` | Detección del modo sandbox |
+| `ses:GetSendQuota` | Consulta de la cuota de envío |
 | `polly:SynthesizeSpeech` | Módulo de Audio (locuciones) |
 
 Si falta `polly:SynthesizeSpeech`, el módulo de Audio responde con un mensaje
@@ -375,7 +375,8 @@ copia restaura de verdad**: una copia sin probar no es una copia.
 - [ ] `npm run build` y colocar el `.htaccess` de `dist/`
 - [ ] Dispatcher programado y comprobado en el log
 - [ ] Copia de seguridad programada y una restauración probada
-- [ ] Acceso de producción de SES solicitado (salir del sandbox)
+- [ ] `AWS_REGION=us-east-1` (región donde SES está en producción)
+- [ ] Estados de email activados (`bin/ses-events.php setup`): rebotes y quejas a Supresiones
 - [ ] Remitente verificado y marcado como predeterminado
 - [ ] Permisos de AWS revisados (incluido `polly:SynthesizeSpeech` si usas Audio)
 

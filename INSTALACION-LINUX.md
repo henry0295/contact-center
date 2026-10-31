@@ -627,7 +627,7 @@ Crea claves de acceso permanentes (`AKIA...`) para ese usuario y ponlas en `AWS_
 
 1. En la app, módulo **Verificación**: verifica el dominio. La app pide la verificación a SES y muestra los registros TXT y DKIM (CNAME) que hay que crear en tu DNS.
 2. Crea el remitente (y, si lo usas, el de respuesta/Reply-To) sobre el dominio verificado y márcalo como predeterminado. Tiene prioridad sobre `MAIL_FROM`.
-3. **Salir del sandbox:** consola SES (misma región que `AWS_REGION`) → *Account dashboard* → *Request production access*. En sandbox solo se puede enviar a direcciones verificadas, a 1 mensaje/s.
+3. **Producción:** la cuenta de SES de Vozip ya está fuera del sandbox en **us-east-1** (50.000 correos/día, 14/s): se envía a cualquier destinatario sin verificarlo. Deja `AWS_REGION=us-east-1`; en otra región sigue en sandbox (solo destinatarios verificados, 1 mensaje/s).
 
 ### 13.3 Rebotes y quejas (webhook)
 
@@ -764,7 +764,7 @@ sudo systemctl reload php8.3-fpm && sudo systemctl start contact-center-dispatch
 | **429** en el login | Límite de 5 fallos por cuenta y 20 por IP en 15 min. Si hay un proxy delante sin `TRUST_PROXY`, todos comparten la IP del proxy. |
 | No se escriben logs o falla la subida de imágenes | Permisos de `storage/` y `public/uploads/` (§3.1). El logger se desactiva en silencio si no puede escribir. |
 | Campañas programadas no salen o salen a otra hora | Timer inactivo (`systemctl list-timers`) o zona horaria (§2.1). |
-| Email rechazado: "sandbox" / *Email address is not verified* | SES en sandbox o remitente sin verificar en la región de `AWS_REGION` (§13.2). |
+| Email rechazado: *Email address is not verified* | Remitente sin verificar en la región de `AWS_REGION`, o `AWS_REGION` distinta de us-east-1 (§13.2). |
 | La suscripción SNS no se confirma o el webhook da 403 | `allow_url_fopen=On`, salida HTTPS permitida, URL exacta `/api/webhooks/ses`, *raw message delivery* desactivado. |
 | "No se pudo conectar con la API de llamadas de voz" | Sin ruta hacia `VOICE_API_URL` (§14) o `VOICE_API_KEY` incorrecta (401/403 de la API). |
 | Las imágenes no se ven en los correos recibidos | `APP_URL` no es la URL pública HTTPS o `/uploads/` no está mapeado (§9). |
