@@ -601,7 +601,7 @@ const Verification: React.FC = () => {
                       onChange={(e) => setNewSenderName(e.target.value)}
                       maxLength={100}
                       className="mt-1 shadow-sm focus:ring-blue-500 focus:border-blue-500 block w-full sm:w-80 sm:text-sm border-gray-300 rounded-md border px-3 py-2"
-                      placeholder="UNICUCES"
+                      placeholder="Ej.: nombre de tu empresa"
                     />
                   </div>
                   {previewEmail && (
@@ -648,7 +648,7 @@ const Verification: React.FC = () => {
                               onChange={(e) => setEditingNameValue(e.target.value)}
                               maxLength={100}
                               autoFocus
-                              placeholder="UNICUCES"
+                              placeholder="Ej.: nombre de tu empresa"
                               className="shadow-sm focus:ring-blue-500 focus:border-blue-500 block w-64 sm:text-sm border-gray-300 rounded-md border px-3 py-1.5"
                             />
                             <button
