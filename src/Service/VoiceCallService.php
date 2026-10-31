@@ -42,6 +42,38 @@ class VoiceCallService
         ]);
     }
 
+    /**
+     * Número en formato E.164 (+573001234567), que es el que espera la API de
+     * voz. Así el usuario puede escribir los números sin el +57:
+     *   3001234567          -> +573001234567  (celular de 10 dígitos)
+     *   6015551234          -> +576015551234  (fijo nuevo de 10 dígitos, 60x)
+     *   573001234567        -> +573001234567
+     *   +57 300 123 4567    -> +573001234567  (espacios, guiones y paréntesis fuera)
+     *   0057...             -> +57...
+     * Un número de otro país debe venir con su + (p.ej. +5215512345678).
+     */
+    public static function normalizePhone(string $phone): string
+    {
+        $phone = trim($phone);
+        $plus = str_starts_with($phone, '+');
+        $digits = preg_replace('/\D+/', '', $phone) ?? '';
+        if ($digits === '') {
+            return $phone;
+        }
+        if (!$plus && str_starts_with($digits, '00')) {
+            $digits = substr($digits, 2);
+            $plus = true;
+        }
+        if (!$plus && strlen($digits) === 10 && ($digits[0] === '3' || str_starts_with($digits, '60'))) {
+            return '+57' . $digits;
+        }
+        if (!$plus && strlen($digits) === 12 && str_starts_with($digits, '57')) {
+            return '+' . $digits;
+        }
+
+        return $plus ? '+' . $digits : $digits;
+    }
+
     public function isConfigured(): bool
     {
         return $this->apiKey !== '' && (string) ($_ENV['VOICE_API_URL'] ?? '') !== '';
@@ -56,6 +88,7 @@ class VoiceCallService
      */
     public function call(string $phone, string $message, string $gender = 'F'): array
     {
+        $phone = self::normalizePhone($phone);
         if (!$this->isConfigured()) {
             throw new \RuntimeException(
                 'La API de llamadas de voz no está configurada. Ejecuta en el servidor: '

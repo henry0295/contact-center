@@ -86,16 +86,16 @@ const CallModule: React.FC = () => {
   const downloadSimpleTemplate = () => {
     downloadCsv('plantilla-llamadas-simple.csv', [
       ['telefono'],
-      ['+573001112233'],
-      ['+573004445566'],
+      ['3001112233'],
+      ['3004445566'],
     ]);
   };
 
   const downloadVariablesTemplate = () => {
     downloadCsv('plantilla-llamadas-con-variables.csv', [
       ['telefono', 'nombre', 'valor'],
-      ['+573001112233', 'Ana Pérez', '150000'],
-      ['+573004445566', 'Carlos Gómez', '98500'],
+      ['3001112233', 'Ana Pérez', '150000'],
+      ['3004445566', 'Carlos Gómez', '98500'],
     ]);
   };
 
@@ -345,7 +345,7 @@ const CallModule: React.FC = () => {
                     value={pasteText}
                     onChange={(e) => setPasteText(e.target.value)}
                     className={inputClass}
-                    placeholder="Un número por línea, o separados por comas (formato E.164: +573001234567)"
+                    placeholder="Un número por línea, o separados por comas (3001234567 o +573001234567; el +57 se agrega solo)"
                   />
                   <p className="mt-1 text-xs text-gray-500">{pastedRecipients.length} destinatario(s) detectado(s)</p>
                 </>
@@ -478,7 +478,7 @@ const CallModule: React.FC = () => {
                     value={testPhone}
                     onChange={(e) => setTestPhone(e.target.value)}
                     className={inputClass}
-                    placeholder="+573001234567"
+                    placeholder="3001234567"
                   />
                 </div>
                 <button

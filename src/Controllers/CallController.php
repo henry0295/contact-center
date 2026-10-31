@@ -94,6 +94,7 @@ class CallController
     {
         $data = $request->getParsedBody() ?? [];
         $to = trim((string) ($data['to'] ?? ''));
+        $to = $to === '' ? '' : \App\Service\VoiceCallService::normalizePhone($to);
 
         if ($to === '') {
             return $this->jsonResponse($response, ['error' => 'Indica el número para la prueba.'], 400);
@@ -151,15 +152,19 @@ class CallController
             $raw = is_array($decoded) ? $decoded : (preg_split('/[\s,;]+/', $raw) ?: []);
         }
 
+        // Se guardan ya con +57 (Reportes, duplicados y la API de voz ven el mismo número).
         $out = [];
         foreach ((array) $raw as $v) {
             if (is_array($v)) {
+                if (isset($v['phone']) && is_scalar($v['phone']) && trim((string) $v['phone']) !== '') {
+                    $v['phone'] = VoiceCallService::normalizePhone((string) $v['phone']);
+                }
                 $out[] = $v;
                 continue;
             }
             $v = trim((string) $v);
             if ($v !== '') {
-                $out[] = $v;
+                $out[] = VoiceCallService::normalizePhone($v);
             }
         }
 
