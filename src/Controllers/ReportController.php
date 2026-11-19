@@ -7,6 +7,7 @@ use App\Repositories\MessageRepository;
 use App\Repositories\ReportRepository;
 use App\Repositories\SuppressionRepository;
 use App\Support\Csv;
+use App\Support\CurrentUser;
 use App\Support\Paginator;
 use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
@@ -64,7 +65,8 @@ class ReportController
             $this->param($q, 'status'),
             $this->date($q, 'from'),
             $this->date($q, 'to'),
-            $this->param($q, 'search')
+            $this->param($q, 'search'),
+            CurrentUser::ownerScope()
         );
 
         return $this->jsonResponse($response, [
@@ -133,7 +135,9 @@ class ReportController
             'failureReasons'      => $r->failureReasons($since, $until),
             'campaigns'           => ['total' => count($inRange), 'byStatus' => $statusCounts],
             'campaignPerformance' => $performance,
-            'topFailures'         => $this->messages->topFailures(10),
+            'topFailures'         => $this->messages->topFailures(10, CurrentUser::ownerScope()),
+            // false = solo ve sus propios envíos (no es administrador).
+            'allUsers'            => CurrentUser::ownerScope() === null,
             'suppressions'        => $this->suppressions->countsByReason(),
         ]);
     }
@@ -175,7 +179,8 @@ class ReportController
             $this->param($q, 'status'),
             $this->date($q, 'from'),
             $this->date($q, 'to'),
-            $this->param($q, 'search')
+            $this->param($q, 'search'),
+            CurrentUser::ownerScope()
         );
         $rows = (function () use ($result) {
             foreach ($result['items'] as $m) {

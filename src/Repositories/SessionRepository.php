@@ -79,6 +79,26 @@ class SessionRepository
         return $role === false ? null : (string) $role;
     }
 
+    /**
+     * Rol, email y nombre ACTUALES del dueño de una sesión activa (null si la
+     * sesión no vale). El email del JWT puede estar desactualizado si se editó
+     * el usuario; el alcance de los reportes depende de él.
+     *
+     * @return array{role:string,email:string,name:string}|null
+     */
+    public function activeUser(string $jti): ?array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT u.role, u.email, u.name FROM sessions s JOIN users u ON u.id = s.user_id
+              WHERE s.jti = :jti AND s.revoked = 0 AND s.expires_at > NOW() LIMIT 1'
+        );
+        $stmt->bindValue(':jti', $jti, PDO::PARAM_STR);
+        $stmt->execute();
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        return $row === false ? null : ['role' => (string) $row['role'], 'email' => (string) $row['email'], 'name' => (string) $row['name']];
+    }
+
     public function revoke(string $jti): bool
     {
         $stmt = $this->pdo->prepare('UPDATE sessions SET revoked = 1 WHERE jti = :jti AND revoked = 0');

@@ -161,6 +161,9 @@ class UserController
         }
 
         $this->users->update($id, $name, $email, $role);
+        if ($emailChanged) {
+            $this->users->renameCampaignOwner((string) $target['email'], $email);
+        }
 
         // El token lleva el email: a otro usuario se le cierran las sesiones
         // para que vuelva a entrar con los datos nuevos. Al propio usuario no.

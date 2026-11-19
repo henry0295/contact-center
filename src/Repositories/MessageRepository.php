@@ -73,10 +73,16 @@ class MessageRepository
         ?string $status = null,
         ?string $from = null,
         ?string $to = null,
-        ?string $search = null
+        ?string $search = null,
+        ?string $owner = null
     ): array {
         $conditions = [];
         $params = [];
+        // Solo los mensajes de campañas de ese usuario (no administrador).
+        if ($owner !== null) {
+            $conditions[] = 'campaign_id IN (SELECT id FROM campaigns WHERE created_by = :owner)';
+            $params[':owner'] = $owner;
+        }
 
         if ($channel !== null && $channel !== '') {
             $conditions[] = 'channel = :channel';
@@ -176,16 +182,20 @@ class MessageRepository
     }
 
     /** Destinatarios con más fallos, para detectar direcciones problemáticas. */
-    public function topFailures(int $limit = 10): array
+    public function topFailures(int $limit = 10, ?string $owner = null): array
     {
+        $own = $owner !== null ? ' AND campaign_id IN (SELECT id FROM campaigns WHERE created_by = :owner)' : '';
         $stmt = $this->pdo->prepare(
             "SELECT recipient, channel, COUNT(*) AS fallos, MAX(created_at) AS ultimo
-             FROM messages WHERE status = 'Failed'
+             FROM messages WHERE status = 'Failed'{$own}
              GROUP BY recipient, channel
              ORDER BY fallos DESC, ultimo DESC
              LIMIT :limit"
         );
         $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
+        if ($owner !== null) {
+            $stmt->bindValue(':owner', $owner, PDO::PARAM_STR);
+        }
         $stmt->execute();
 
         return array_map(static function (array $r): array {

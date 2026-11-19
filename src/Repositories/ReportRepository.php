@@ -3,6 +3,7 @@
 namespace App\Repositories;
 
 use App\Database\Connection;
+use App\Support\CurrentUser;
 use PDO;
 
 /**
@@ -18,9 +19,31 @@ class ReportRepository
 
     private PDO $pdo;
 
-    public function __construct(?PDO $pdo = null)
+    /**
+     * Email del usuario al que se limitan las métricas (campaigns.created_by),
+     * o null para ver todo. Por defecto, el del usuario de la petición: un
+     * usuario que no es administrador solo ve sus propios envíos.
+     */
+    private ?string $owner;
+
+    private const OWN_C = 'c.created_by = :owner';
+    private const OWN_ID = 'campaign_id IN (SELECT id FROM campaigns WHERE created_by = :owner)';
+
+    public function __construct(?PDO $pdo = null, ?string $owner = null, bool $allOwners = false)
     {
         $this->pdo = $pdo ?? Connection::get();
+        $this->owner = $allOwners ? null : ($owner ?? CurrentUser::ownerScope());
+    }
+
+    /** " AND <condición>" si hay alcance por usuario (y añade :owner a $params). */
+    private function own(string $condition, array &$params): string
+    {
+        if ($this->owner === null) {
+            return '';
+        }
+        $params[':owner'] = $this->owner;
+
+        return ' AND ' . $condition;
     }
 
     /**
@@ -31,13 +54,15 @@ class ReportRepository
      */
     public function byChannel(string $since, string $until): array
     {
+        $params = [':since' => $since, ':until' => $until];
+        $own = $this->own(self::OWN_ID, $params);
         $stmt = $this->pdo->prepare(
             "SELECT channel, SUM(status = 'Sent') AS sent, SUM(status = 'Failed') AS failed
                FROM messages
-              WHERE created_at >= :since AND created_at < :until AND status IN ('Sent', 'Failed')
+              WHERE created_at >= :since AND created_at < :until AND status IN ('Sent', 'Failed')$own
               GROUP BY channel"
         );
-        $stmt->execute([':since' => $since, ':until' => $until]);
+        $stmt->execute($params);
         $out = [];
         foreach ($stmt->fetchAll() as $r) {
             $sent = (int) $r['sent'];
@@ -57,14 +82,16 @@ class ReportRepository
     /** Serie diaria (Sent/Failed por canal) del rango. */
     public function dailySeries(string $since, string $until): array
     {
+        $params = [':since' => $since, ':until' => $until];
+        $own = $this->own(self::OWN_ID, $params);
         $stmt = $this->pdo->prepare(
             "SELECT DATE(created_at) AS dia, channel, status, COUNT(*) AS total
                FROM messages
-              WHERE created_at >= :since AND created_at < :until AND status IN ('Sent', 'Failed')
+              WHERE created_at >= :since AND created_at < :until AND status IN ('Sent', 'Failed')$own
               GROUP BY dia, channel, status
               ORDER BY dia ASC"
         );
-        $stmt->execute([':since' => $since, ':until' => $until]);
+        $stmt->execute($params);
 
         return array_map(static fn (array $r) => ['dia' => (string) $r['dia'], 'channel' => (string) $r['channel'], 'status' => (string) $r['status'], 'total' => (int) $r['total']], $stmt->fetchAll());
     }
@@ -77,15 +104,17 @@ class ReportRepository
      */
     public function spend(string $since, string $until): array
     {
+        $params = [':since' => $since, ':until' => $until];
+        $own = $this->own(self::OWN_ID, $params);
         $stmt = $this->pdo->prepare(
             "SELECT channel,
                     -SUM(CASE WHEN type = 'debit' THEN amount ELSE 0 END) AS debited,
                     SUM(CASE WHEN type = 'refund' THEN amount ELSE 0 END) AS refunded
                FROM credit_transactions
-              WHERE type IN ('debit', 'refund') AND created_at >= :since AND created_at < :until
+              WHERE type IN ('debit', 'refund') AND created_at >= :since AND created_at < :until$own
               GROUP BY channel"
         );
-        $stmt->execute([':since' => $since, ':until' => $until]);
+        $stmt->execute($params);
         $by = [];
         $refunded = 0.0;
         foreach ($stmt->fetchAll() as $r) {
@@ -114,6 +143,7 @@ class ReportRepository
             $params[':since'] = $since;
             $params[':until'] = $until;
         }
+        $where .= $this->own(self::OWN_C, $params);
         $stmt = $this->pdo->prepare(
             "SELECT LEFT(cr.error, 160) AS reason, c.channel, COUNT(*) AS n
                FROM campaign_recipients cr
@@ -139,12 +169,14 @@ class ReportRepository
      */
     public function whatsappFunnel(string $since, string $until): array
     {
+        $params = [':since' => $since, ':until' => $until];
+        $own = $this->own(self::OWN_C, $params);
         $stmt = $this->pdo->prepare(
             "SELECT " . self::FUNNEL_COLS . "
                FROM campaign_recipients cr JOIN campaigns c ON c.id = cr.campaign_id
-              WHERE c.channel = 'whatsapp' AND c.created_at >= :since AND c.created_at < :until"
+              WHERE c.channel = 'whatsapp' AND c.created_at >= :since AND c.created_at < :until$own"
         );
-        $stmt->execute([':since' => $since, ':until' => $until]);
+        $stmt->execute($params);
 
         return self::funnel($stmt->fetch() ?: []);
     }
@@ -156,6 +188,8 @@ class ReportRepository
      */
     public function emailDelivery(string $since, string $until): array
     {
+        $params = [':since' => $since, ':until' => $until];
+        $own = $this->own(self::OWN_C, $params);
         $stmt = $this->pdo->prepare(
             "SELECT SUM(cr.status IN ('Sent', 'Failed') AND cr.external_id IS NOT NULL) AS tracked,
                     SUM(cr.delivery_status = 'delivered') AS delivered,
@@ -164,9 +198,9 @@ class ReportRepository
                     SUM(cr.delivery_status = 'rejected') AS rejected,
                     SUM(cr.status = 'Sent' AND cr.delivery_status = 'accepted') AS pending
                FROM campaign_recipients cr JOIN campaigns c ON c.id = cr.campaign_id
-              WHERE c.channel = 'email' AND c.created_at >= :since AND c.created_at < :until"
+              WHERE c.channel = 'email' AND c.created_at >= :since AND c.created_at < :until$own"
         );
-        $stmt->execute([':since' => $since, ':until' => $until]);
+        $stmt->execute($params);
         $r = $stmt->fetch() ?: [];
         $tracked = (int) ($r['tracked'] ?? 0);
         $bounced = (int) ($r['bounced'] ?? 0);
@@ -190,12 +224,14 @@ class ReportRepository
      */
     public function callOutcomes(string $since, string $until): array
     {
+        $params = [':since' => $since, ':until' => $until, ':busy' => self::CALL_BUSY, ':noans' => self::CALL_NO_ANSWER];
+        $own = $this->own(self::OWN_C, $params);
         $stmt = $this->pdo->prepare(
             "SELECT " . self::CALL_COLS . "
                FROM campaign_recipients cr JOIN campaigns c ON c.id = cr.campaign_id
-              WHERE c.channel = 'call' AND c.created_at >= :since AND c.created_at < :until"
+              WHERE c.channel = 'call' AND c.created_at >= :since AND c.created_at < :until$own"
         );
-        $stmt->execute([':since' => $since, ':until' => $until, ':busy' => self::CALL_BUSY, ':noans' => self::CALL_NO_ANSWER]);
+        $stmt->execute($params);
 
         return self::calls($stmt->fetch() ?: []);
     }
@@ -205,11 +241,13 @@ class ReportRepository
     {
         $out = ['replies' => 0, 'optOuts' => 0];
         foreach (['sms_replies', 'whatsapp_inbound'] as $table) {
+            $params = [':since' => $since, ':until' => $until];
+            $own = $this->own(self::OWN_ID, $params);
             $stmt = $this->pdo->prepare(
                 "SELECT SUM(is_optout = 0) AS r, SUM(is_optout = 1) AS o FROM $table
-                  WHERE received_at >= :since AND received_at < :until"
+                  WHERE received_at >= :since AND received_at < :until$own"
             );
-            $stmt->execute([':since' => $since, ':until' => $until]);
+            $stmt->execute($params);
             $row = $stmt->fetch() ?: [];
             $out['replies'] += (int) ($row['r'] ?? 0);
             $out['optOuts'] += (int) ($row['o'] ?? 0);
@@ -291,11 +329,13 @@ class ReportRepository
      */
     public function campaignsInRange(string $since, string $until, int $limit = 500): array
     {
+        $params = [':since' => $since, ':until' => $until];
+        $own = $this->own('created_by = :owner', $params);
         $stmt = $this->pdo->prepare(
-            'SELECT * FROM campaigns WHERE created_at >= :since AND created_at < :until
+            'SELECT * FROM campaigns WHERE created_at >= :since AND created_at < :until' . $own . '
               ORDER BY created_at DESC LIMIT ' . max(1, min(5000, $limit))
         );
-        $stmt->execute([':since' => $since, ':until' => $until]);
+        $stmt->execute($params);
 
         return $stmt->fetchAll();
     }
@@ -317,6 +357,11 @@ class ReportRepository
     /** Usuarios que han creado campañas (para el filtro). */
     public function creators(): array
     {
+        // Sin alcance completo, el filtro de usuarios solo muestra al propio.
+        if ($this->owner !== null) {
+            return $this->owner === '' ? [] : [$this->owner];
+        }
+
         return array_map('strval', $this->pdo->query(
             "SELECT DISTINCT created_by FROM campaigns WHERE created_by IS NOT NULL AND created_by <> '' ORDER BY created_by"
         )->fetchAll(PDO::FETCH_COLUMN));

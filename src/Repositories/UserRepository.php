@@ -82,6 +82,20 @@ class UserRepository
         $stmt->execute();
     }
 
+    /**
+     * Al cambiar el email de un usuario, sus campañas pasan al email nuevo
+     * (campaigns.created_by es el email): así sigue viendo sus envíos.
+     */
+    public function renameCampaignOwner(string $oldEmail, string $newEmail): int
+    {
+        $stmt = $this->pdo->prepare('UPDATE campaigns SET created_by = :new WHERE created_by = :old');
+        $stmt->bindValue(':new', $newEmail, PDO::PARAM_STR);
+        $stmt->bindValue(':old', $oldEmail, PDO::PARAM_STR);
+        $stmt->execute();
+
+        return $stmt->rowCount();
+    }
+
     public function countByRole(string $role): int
     {
         $stmt = $this->pdo->prepare('SELECT COUNT(*) FROM users WHERE role = :role');

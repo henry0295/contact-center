@@ -157,9 +157,16 @@ class CampaignRepository
         return (int) $this->pdo->lastInsertId();
     }
 
-    public function all(): array
+    /** Todas las campañas, o solo las de un usuario ($owner = campaigns.created_by). */
+    public function all(?string $owner = null): array
     {
-        return $this->pdo->query('SELECT * FROM campaigns ORDER BY created_at DESC')->fetchAll();
+        if ($owner === null) {
+            return $this->pdo->query('SELECT * FROM campaigns ORDER BY created_at DESC')->fetchAll();
+        }
+        $stmt = $this->pdo->prepare('SELECT * FROM campaigns WHERE created_by = :owner ORDER BY created_at DESC');
+        $stmt->execute([':owner' => $owner]);
+
+        return $stmt->fetchAll();
     }
 
     /**
@@ -168,15 +175,21 @@ class CampaignRepository
      */
     public function recentBodies(string $channel, int $limit = 10): array
     {
+        // Un usuario que no es administrador solo ve sus propios mensajes.
+        $owner = \App\Support\CurrentUser::ownerScope();
+        $own = $owner !== null ? ' AND created_by = :owner' : '';
         $stmt = $this->pdo->prepare(
             'SELECT MAX(id) AS id, MAX(name) AS name, subject, body, MAX(created_at) AS created_at
                FROM campaigns
-              WHERE channel = :channel AND body IS NOT NULL AND body <> \'\'
+              WHERE channel = :channel AND body IS NOT NULL AND body <> \'\'' . $own . '
               GROUP BY body, subject
               ORDER BY MAX(created_at) DESC
               LIMIT :limit'
         );
         $stmt->bindValue(':channel', $channel, PDO::PARAM_STR);
+        if ($owner !== null) {
+            $stmt->bindValue(':owner', $owner, PDO::PARAM_STR);
+        }
         $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
         $stmt->execute();
 

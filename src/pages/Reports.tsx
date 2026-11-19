@@ -8,6 +8,7 @@ import {
 import toast from 'react-hot-toast';
 import * as api from '../services/api';
 import { useUser } from '../context/UserContext';
+import SafeHtmlFrame from '../components/SafeHtmlFrame';
 
 type Tab = 'resumen' | 'historial' | 'campanas' | 'supresiones';
 type Period = '7' | '30' | '90' | '365' | 'custom';
@@ -771,7 +772,9 @@ const Reports: React.FC = () => {
               <div className="rounded-md border-l-4 border-blue-400 bg-blue-50 p-4">
                 <p className="text-sm text-blue-800">
                   Cada envío de email, SMS, llamada o WhatsApp (individual, masivo o de prueba) crea aquí su propia campaña.
-                  Revisa el detalle por destinatario, exporta los resultados, cancela una programada o elimínala.
+                  Abre una campaña (<Eye className="inline h-3.5 w-3.5" aria-hidden="true" />) para ver el mensaje que se envió y el detalle por destinatario,
+                  exporta los resultados, cancela una programada o elimínala.
+                  {!isAdmin && <> Solo ves los envíos que hiciste tú; el administrador ve los de todos.</>}
                 </p>
               </div>
 
@@ -806,7 +809,7 @@ const Reports: React.FC = () => {
                   <option value="campaign">Campaña (API)</option>
                   <option value="test">Prueba</option>
                 </select>
-                {creators.length > 0 ? (
+                {isAdmin && creators.length > 0 ? (
                   <select value={campFilters.createdBy} onChange={(e) => { setCampFilters({ ...campFilters, createdBy: e.target.value }); setCampPageNum(1); }} className={inputClass} aria-label="Creada por">
                     <option value="">Todos los usuarios</option>
                     {creators.map((u) => <option key={u} value={u}>{u}</option>)}
@@ -954,6 +957,98 @@ const Reports: React.FC = () => {
 
 // ------------------------------------------------------ detalle --
 
+/** Texto con los {{1}}..{{n}} de WhatsApp reemplazados y resaltados. */
+function fillWaVars(text: string, params: string[]): React.ReactNode[] {
+  return text.split(/(\{\{\d+\}\})/g).map((part, i) => {
+    const m = /^\{\{(\d+)\}\}$/.exec(part);
+    if (!m) return <React.Fragment key={i}>{part}</React.Fragment>;
+    const v = params[Number(m[1]) - 1];
+    return <mark key={i} className="rounded bg-yellow-100 px-0.5 text-gray-900">{v !== undefined && v !== '' ? v : part}</mark>;
+  });
+}
+
+/** Mensaje tal como se envió: correo (HTML), SMS, locución de la llamada o plantilla de WhatsApp. */
+const CampaignContent: React.FC<{ detail: Awaited<ReturnType<typeof api.getCampaign>> }> = ({ detail }) => {
+  const c = detail.campaign;
+  const body = c.body ?? '';
+  const hasFields = /\{\{[a-z_][a-z0-9_]*\}\}/i.test(body + (c.subject ?? '') + (detail.waParams?.body ?? []).join(' '));
+  const box = 'whitespace-pre-wrap break-words rounded-md border border-gray-200 bg-gray-50 p-3 text-sm text-gray-800';
+
+  let content: React.ReactNode;
+  if (c.channel === 'email') {
+    content = (
+      <>
+        <dl className="mb-2 space-y-1 text-sm">
+          <div><dt className="inline text-gray-500">Asunto: </dt><dd className="inline font-medium text-gray-900">{c.subject || '(sin asunto)'}</dd></div>
+          {c.reply_to && <div><dt className="inline text-gray-500">Respuestas a: </dt><dd className="inline text-gray-800">{c.reply_to}</dd></div>}
+        </dl>
+        {body
+          ? <SafeHtmlFrame html={body} title={`Correo de ${c.name}`} className="h-96 w-full rounded-md border border-gray-200 bg-white" />
+          : <p className="text-sm text-gray-500">Sin contenido.</p>}
+      </>
+    );
+  } else if (c.channel === 'whatsapp') {
+    const t = detail.waTemplate;
+    const params = detail.waParams?.body ?? [];
+    const media = detail.waParams?.header_media;
+    content = (
+      <>
+        {t && (
+          <p className="mb-2 text-xs text-gray-500">
+            Plantilla <span className="font-mono text-gray-700">{t.name}</span>
+            {t.language && <> · {t.language}</>}
+            {t.category && <> · {t.category}</>}
+          </p>
+        )}
+        <div className="max-w-md rounded-lg border border-green-200 bg-[#e7fbe0] p-3 text-sm text-gray-900 shadow-sm">
+          {media?.link && (
+            <p className="mb-2 break-all text-xs text-gray-600">
+              {media.type === 'image' ? 'Imagen' : media.type === 'video' ? 'Video' : 'Documento'}:{' '}
+              <a href={media.link} target="_blank" rel="noopener noreferrer" className="text-blue-700 underline">{media.link}</a>
+            </p>
+          )}
+          {t?.header && <p className="mb-1 font-semibold">{fillWaVars(t.header, params)}</p>}
+          <p className="whitespace-pre-wrap break-words">{fillWaVars(body, params)}</p>
+          {t?.footer && <p className="mt-2 text-xs text-gray-500">{t.footer}</p>}
+          {(t?.buttons?.length ?? 0) > 0 && (
+            <div className="mt-2 space-y-1 border-t border-green-200 pt-2">
+              {t!.buttons.map((b, i) => (
+                <div key={i} className="text-center text-sm font-medium text-blue-700">{b.text}</div>
+              ))}
+            </div>
+          )}
+        </div>
+      </>
+    );
+  } else {
+    content = (
+      <>
+        {c.channel === 'call' && (
+          <p className="mb-2 text-xs text-gray-500">Locución leída en la llamada · voz {c.voice_gender === 'M' ? 'masculina' : 'femenina'}</p>
+        )}
+        {c.channel === 'sms' && (
+          <p className="mb-2 text-xs text-gray-500">
+            {body.length} caracteres{c.segments > 1 ? ` · ${c.segments} segmentos por mensaje` : ''}
+          </p>
+        )}
+        <div className={box}>{body || 'Sin contenido.'}</div>
+      </>
+    );
+  }
+
+  return (
+    <section aria-labelledby="campContentTitle">
+      <h4 id="campContentTitle" className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-700">
+        {c.channel === 'call' ? 'Mensaje de la llamada' : c.channel === 'email' ? 'Correo enviado' : 'Mensaje enviado'}
+      </h4>
+      {content}
+      {hasFields && (
+        <p className="mt-1 text-xs text-gray-500">Los campos como {'{{nombre}}'} se reemplazaron con los datos de cada destinatario.</p>
+      )}
+    </section>
+  );
+};
+
 const CampaignDetail: React.FC<{ detail: Awaited<ReturnType<typeof api.getCampaign>>; onClose: () => void }> = ({ detail, onClose }) => {
   const c = detail.campaign;
   const s = detail.stats;
@@ -1012,6 +1107,8 @@ const CampaignDetail: React.FC<{ detail: Awaited<ReturnType<typeof api.getCampai
               {s.optOuts > 0 && <>Bajas: <span className="font-medium text-red-600">{s.optOuts}</span>.</>}
             </p>
           )}
+
+          <CampaignContent detail={detail} />
 
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-gray-600">
             {c.sender_id && <span>Remitente: <span className="font-medium">{c.sender_id}</span></span>}

@@ -10,6 +10,7 @@ use App\Support\Csv;
 use App\Service\CampaignService;
 use App\Service\SendOrchestrator;
 use App\Support\Attachments;
+use App\Support\CurrentUser;
 use App\Support\Paginator;
 use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
@@ -59,6 +60,15 @@ class CampaignController
             'createdBy' => mb_substr(trim((string) ($q['createdBy'] ?? '')), 0, 255) ?: null,
         ];
 
+        // Un usuario que no es administrador solo ve sus propias campañas.
+        $owner = CurrentUser::ownerScope();
+        if ($owner === '') {
+            return $this->jsonResponse($response, ['campaigns' => [], 'pagination' => $p->meta(0), 'creators' => []]);
+        }
+        if ($owner !== null) {
+            $extra['createdBy'] = $owner;
+        }
+
         $result = $this->campaigns->paginate($p->perPage, $p->offset, $status, $channel, $origin, $extra);
 
         // Gasto, respuestas y bajas de cada campaña de la página.
@@ -83,7 +93,7 @@ class CampaignController
     /** Destinatarios de la campaña en CSV (estado, entrega y motivo del fallo). */
     public function export(Request $request, Response $response, array $args): Response
     {
-        $campaign = $this->campaigns->find((int) ($args['id'] ?? 0));
+        $campaign = $this->visibleCampaign((int) ($args['id'] ?? 0));
         if ($campaign === null) {
             return $this->jsonResponse($response, ['error' => 'Campaña no encontrada'], 404);
         }
@@ -107,7 +117,7 @@ class CampaignController
 
     public function show(Request $request, Response $response, array $args): Response
     {
-        $campaign = $this->campaigns->find((int) ($args['id'] ?? 0));
+        $campaign = $this->visibleCampaign((int) ($args['id'] ?? 0));
         if ($campaign === null) {
             return $this->jsonResponse($response, ['error' => 'Campaña no encontrada'], 404);
         }
@@ -115,7 +125,31 @@ class CampaignController
         $reports = new ReportRepository();
         $id = (int) $campaign['id'];
 
+        // WhatsApp: plantilla usada y valores de sus variables {{1}}..{{n}},
+        // para mostrar el mensaje tal como se envió.
+        $waTemplate = null;
+        $waParams = null;
+        if ($campaign['channel'] === 'whatsapp') {
+            $decoded = json_decode((string) ($campaign['wa_params_json'] ?? ''), true);
+            $waParams = is_array($decoded) ? $decoded : null;
+            $tpl = !empty($campaign['wa_template_id'])
+                ? (new \App\Repositories\WhatsAppRepository())->findTemplate((int) $campaign['wa_template_id'])
+                : null;
+            if ($tpl !== null) {
+                $waTemplate = [
+                    'name'     => $tpl['element_name'] ?? null,
+                    'language' => $tpl['language'] ?? null,
+                    'category' => $tpl['category'] ?? null,
+                    'header'   => $tpl['header'] ?? null,
+                    'footer'   => $tpl['footer'] ?? null,
+                    'buttons'  => $tpl['buttons'] ?? (json_decode((string) ($tpl['buttons_json'] ?? ''), true) ?: []),
+                ];
+            }
+        }
+
         return $this->jsonResponse($response, [
+            'waTemplate'  => $waTemplate,
+            'waParams'    => $waParams,
             'campaign'    => $campaign,
             'stats'       => ReportController::performanceRow($campaign, $reports->campaignStats([$id])[$id] ?? []),
             'failureReasons' => $reports->failureReasons(null, null, $id, 8),
@@ -184,7 +218,7 @@ class CampaignController
     /** Fuerza el envío inmediato de una campaña (p.ej. una Draft/Scheduled). */
     public function sendNow(Request $request, Response $response, array $args): Response
     {
-        $campaign = $this->campaigns->find((int) ($args['id'] ?? 0));
+        $campaign = $this->visibleCampaign((int) ($args['id'] ?? 0));
         if ($campaign === null) {
             return $this->jsonResponse($response, ['error' => 'Campaña no encontrada'], 404);
         }
@@ -203,7 +237,7 @@ class CampaignController
     public function cancelSchedule(Request $request, Response $response, array $args): Response
     {
         $id = (int) ($args['id'] ?? 0);
-        $campaign = $this->campaigns->find($id);
+        $campaign = $this->visibleCampaign($id);
 
         if ($campaign === null) {
             return $this->jsonResponse($response, ['error' => 'Campaña no encontrada'], 404);
@@ -222,6 +256,25 @@ class CampaignController
             'message'  => 'Programación cancelada. La campaña quedó como borrador.',
             'campaign' => $this->campaigns->find($id),
         ]);
+    }
+
+    /**
+     * La campaña, si el usuario puede verla: el administrador ve todas; los
+     * demás, solo las que crearon. Una ajena se trata como inexistente (404),
+     * para no revelar que existe.
+     */
+    private function visibleCampaign(int $id): ?array
+    {
+        $campaign = $this->campaigns->find($id);
+        if ($campaign === null) {
+            return null;
+        }
+        $owner = CurrentUser::ownerScope();
+        if ($owner !== null && ($owner === '' || strcasecmp((string) ($campaign['created_by'] ?? ''), $owner) !== 0)) {
+            return null;
+        }
+
+        return $campaign;
     }
 
     public function delete(Request $request, Response $response, array $args): Response

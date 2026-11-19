@@ -217,6 +217,8 @@ export interface Campaign {
   voice_gender: 'F' | 'M' | null;
   /** Email del usuario que la creó (null en campañas antiguas o de consola). */
   created_by?: string | null;
+  /** Email de respuesta (Reply-To) usado, si hubo. */
+  reply_to?: string | null;
   /** Solo en el listado: gasto neto, respuestas y bajas. */
   spent?: number;
   replies?: number;
@@ -848,7 +850,19 @@ export function exportCampaign(id: number): Promise<void> {
 export function cancelCampaignSchedule(id: number): Promise<{ success: boolean; message: string; campaign: Campaign }> {
   return request(`/campaigns/${id}/cancel`, { method: 'POST', body: jsonBody({}) });
 }
+/** Plantilla de WhatsApp usada por una campaña (detalle en Reportes). */
+export interface CampaignWaTemplate {
+  name: string | null;
+  language: string | null;
+  category: string | null;
+  header: string | null;
+  footer: string | null;
+  buttons: { type?: string; text?: string; url?: string; phone_number?: string }[];
+}
 export function getCampaign(id: number): Promise<{
+  waTemplate?: CampaignWaTemplate | null;
+  /** Valores de {{1}}..{{n}} y medio de la cabecera, tal como se enviaron. */
+  waParams?: { body?: string[]; header_media?: { type?: string; link?: string } | null } | null;
   campaign: Campaign;
   stats?: CampaignPerformance;
   failureReasons?: FailureReason[];

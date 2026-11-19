@@ -7,6 +7,7 @@ use App\Repositories\CampaignRepository;
 use App\Repositories\MessageRepository;
 use App\Service\CreditService;
 use App\Service\WhatsAppService;
+use App\Support\CurrentUser;
 use PDO;
 use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
@@ -27,6 +28,18 @@ class DashboardController
     private MessageRepository $messages;
     private CampaignRepository $campaigns;
     private ?PDO $pdo;
+    private ?string $owner = null;
+
+    /** " AND <cond>" y :owner en $params si el usuario solo ve lo suyo. */
+    private function own(string $condition, array &$params): string
+    {
+        if ($this->owner === null) {
+            return '';
+        }
+        $params[':owner'] = $this->owner;
+
+        return ' AND ' . $condition;
+    }
 
     public function __construct(?MessageRepository $messages = null, ?CampaignRepository $campaigns = null, ?PDO $pdo = null)
     {
@@ -48,7 +61,9 @@ class DashboardController
             default => date('Y-m-d H:i:s', strtotime('-30 days')),
         };
 
-        $campaigns = $this->campaigns->all();
+        // Un usuario que no es administrador solo ve sus propios envíos.
+        $this->owner = CurrentUser::ownerScope();
+        $campaigns = $this->campaigns->all($this->owner);
         $active = array_filter($campaigns, static fn (array $c): bool => in_array($c['status'], ['Scheduled', 'Sending'], true));
         $byChannel = $this->byChannel($since);
 
@@ -88,6 +103,8 @@ class DashboardController
         foreach (self::CHANNELS as $ch) {
             $out[$ch] = ['channel' => $ch, 'sent' => 0, 'failed' => 0, 'pending' => 0, 'total' => 0, 'deliveryRate' => 0.0];
         }
+        $params = [':since' => $since];
+        $own = $this->own('c.created_by = :owner', $params);
         $stmt = $this->pdo()->prepare(
             "SELECT c.channel,
                     SUM(cr.status = 'Sent')   AS sent,
@@ -96,10 +113,10 @@ class DashboardController
                     COUNT(*) AS total
                FROM campaign_recipients cr
                JOIN campaigns c ON c.id = cr.campaign_id
-              WHERE c.created_at >= :since
+              WHERE c.created_at >= :since{$own}
               GROUP BY c.channel"
         );
-        $stmt->execute([':since' => $since]);
+        $stmt->execute($params);
         foreach ($stmt->fetchAll() as $r) {
             $ch = (string) $r['channel'];
             if (!isset($out[$ch])) {
@@ -127,11 +144,13 @@ class DashboardController
     private function spend(string $since): array
     {
         $byChannel = array_fill_keys(self::CHANNELS, 0.0);
+        $params = [':since' => $since];
+        $own = $this->own('campaign_id IN (SELECT id FROM campaigns WHERE created_by = :owner)', $params);
         $stmt = $this->pdo()->prepare(
             "SELECT channel, -SUM(amount) AS net FROM credit_transactions
-              WHERE type IN ('debit', 'refund') AND created_at >= :since GROUP BY channel"
+              WHERE type IN ('debit', 'refund') AND created_at >= :since{$own} GROUP BY channel"
         );
-        $stmt->execute([':since' => $since]);
+        $stmt->execute($params);
         foreach ($stmt->fetchAll() as $r) {
             $ch = str_starts_with((string) $r['channel'], 'whatsapp') ? 'whatsapp' : (string) $r['channel'];
             if (isset($byChannel[$ch])) {
@@ -170,17 +189,19 @@ class DashboardController
         // Respuestas (SMS doble vía y WhatsApp), sin contar las bajas.
         $replies = [];
         $count = 0;
+        $rp = [':since' => $since];
+        $rOwn = $this->own('campaign_id IN (SELECT id FROM campaigns WHERE created_by = :owner)', $rp);
         foreach ([
-            ['sms', "SELECT phone, message, received_at FROM sms_replies WHERE is_optout = 0 AND received_at >= :since ORDER BY id DESC LIMIT 5",
-                    "SELECT COUNT(*) FROM sms_replies WHERE is_optout = 0 AND received_at >= :since"],
-            ['whatsapp', "SELECT phone, message, received_at FROM whatsapp_inbound WHERE is_optout = 0 AND received_at >= :since ORDER BY id DESC LIMIT 5",
-                         "SELECT COUNT(*) FROM whatsapp_inbound WHERE is_optout = 0 AND received_at >= :since"],
+            ['sms', "SELECT phone, message, received_at FROM sms_replies WHERE is_optout = 0 AND received_at >= :since{$rOwn} ORDER BY id DESC LIMIT 5",
+                    "SELECT COUNT(*) FROM sms_replies WHERE is_optout = 0 AND received_at >= :since{$rOwn}"],
+            ['whatsapp', "SELECT phone, message, received_at FROM whatsapp_inbound WHERE is_optout = 0 AND received_at >= :since{$rOwn} ORDER BY id DESC LIMIT 5",
+                         "SELECT COUNT(*) FROM whatsapp_inbound WHERE is_optout = 0 AND received_at >= :since{$rOwn}"],
         ] as [$channel, $listSql, $countSql]) {
             $c = $pdo->prepare($countSql);
-            $c->execute([':since' => $since]);
+            $c->execute($rp);
             $count += (int) $c->fetchColumn();
             $s = $pdo->prepare($listSql);
-            $s->execute([':since' => $since]);
+            $s->execute($rp);
             foreach ($s->fetchAll() as $r) {
                 $replies[] = [
                     'channel'    => $channel,
@@ -199,19 +220,25 @@ class DashboardController
             return (int) $s->fetchColumn();
         };
 
-        $upcoming = $pdo->query(
+        $up = [];
+        $upOwn = $this->own('created_by = :owner', $up);
+        $upStmt = $pdo->prepare(
             "SELECT id, name, channel, scheduled_at, total_recipients FROM campaigns
-              WHERE status = 'Scheduled' AND scheduled_at IS NOT NULL AND scheduled_at >= NOW()
+              WHERE status = 'Scheduled' AND scheduled_at IS NOT NULL AND scheduled_at >= NOW(){$upOwn}
               ORDER BY scheduled_at ASC LIMIT 5"
-        )->fetchAll();
+        );
+        $upStmt->execute($up);
+        $upcoming = $upStmt->fetchAll();
 
         // Campañas del periodo con fallos y su motivo más frecuente.
+        $fp = [':since' => $since];
+        $fOwn = $this->own('created_by = :owner', $fp);
         $failedStmt = $pdo->prepare(
             "SELECT id, name, channel, status, sent_count, failed_count, total_recipients, created_at FROM campaigns
-              WHERE created_at >= :since AND failed_count > 0 AND origin <> 'test'
+              WHERE created_at >= :since AND failed_count > 0 AND origin <> 'test'{$fOwn}
               ORDER BY created_at DESC LIMIT 5"
         );
-        $failedStmt->execute([':since' => $since]);
+        $failedStmt->execute($fp);
         $topError = $pdo->prepare(
             "SELECT error, COUNT(*) n FROM campaign_recipients
               WHERE campaign_id = :id AND status = 'Failed' AND error IS NOT NULL
