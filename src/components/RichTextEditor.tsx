@@ -1,7 +1,7 @@
 import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useEditor, EditorContent, Editor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
-import Link from '@tiptap/extension-link';
 import Image from '@tiptap/extension-image';
 import TextAlign from '@tiptap/extension-text-align';
 import { TextStyle } from '@tiptap/extension-text-style';
@@ -95,17 +95,20 @@ const LinkDialog: React.FC<{
     return () => window.removeEventListener('keydown', onKey);
   }, [onCancel]);
 
-  const submit = (e: React.FormEvent) => {
-    e.preventDefault();
+  const submit = () => {
     if (url.trim() === '') return;
     onSubmit(url, text);
   };
 
-  return (
+  // Sin <form>: el compositor ya es un formulario y un submit anidado recargaba
+  // la página. Se monta en el body para que ningún contenedor lo recorte.
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onMouseDown={onCancel}>
-      <form
-        onSubmit={submit}
+      <div
         onMouseDown={(e) => e.stopPropagation()}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') { e.preventDefault(); submit(); }
+        }}
         role="dialog"
         aria-modal="true"
         aria-labelledby="rteLinkTitle"
@@ -164,15 +167,17 @@ const LinkDialog: React.FC<{
             Cancelar
           </button>
           <button
-            type="submit"
+            type="button"
+            onClick={submit}
             disabled={url.trim() === ''}
             className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
           >
             {canRemove ? 'Guardar' : 'Insertar'}
           </button>
         </div>
-      </form>
-    </div>
+      </div>
+    </div>,
+    document.body
   );
 };
 
@@ -187,9 +192,13 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, Props>(function RichText
 
   const editor = useEditor({
     extensions: [
-      StarterKit.configure({ heading: { levels: [1, 2, 3] } }),
+      // StarterKit ya trae la extensión Link: hay que configurarla aquí, porque
+      // añadirla aparte registraba dos marcas "link" en conflicto.
       // Se acepta cualquier dominio; https por defecto al escribir "ejemplo.com".
-      Link.configure({ openOnClick: false, autolink: true, defaultProtocol: 'https', linkOnPaste: true }),
+      StarterKit.configure({
+        heading: { levels: [1, 2, 3] },
+        link: { openOnClick: false, autolink: true, defaultProtocol: 'https', linkOnPaste: true },
+      }),
       Image.configure({ inline: false }),
       TextAlign.configure({ types: ['heading', 'paragraph'] }),
       TextStyle,
@@ -238,7 +247,7 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, Props>(function RichText
 
   const openLinkDialog = useCallback((ed: Editor) => {
     // Si el cursor está dentro de un enlace, se trabaja sobre todo el enlace.
-    ed.chain().focus().extendMarkRange('link').run();
+    ed.chain().focus(everFocused.current ? null : 'end').extendMarkRange('link').run();
     const { from, to, empty } = ed.state.selection;
     const selected = empty ? '' : ed.state.doc.textBetween(from, to, ' ');
     const href = (ed.getAttributes('link').href as string | undefined) ?? '';
@@ -251,7 +260,7 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, Props>(function RichText
       const href = normalizeUrl(rawUrl);
       if (href === '') return;
 
-      const { from, empty } = editor.state.selection;
+      const { empty } = editor.state.selection;
       const label = rawText.trim() !== '' ? rawText.trim() : rawUrl.trim();
       const keepSelection = !empty && label === (linkDialog?.text ?? '').trim();
 
@@ -260,14 +269,12 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, Props>(function RichText
         // conserva su formato (negritas, varios párrafos, etc.).
         editor.chain().focus().setLink({ href }).run();
       } else {
-        // Sin selección (o con otro texto): se inserta el texto y se enlaza.
+        // Sin selección (o con otro texto): se inserta el texto ya enlazado.
         // setLink solo marca texto existente, por eso antes no aparecía nada.
-        editor.chain().focus().insertContent({ type: 'text', text: label }).run();
         editor
           .chain()
-          .setTextSelection({ from, to: from + label.length })
-          .setLink({ href })
-          .setTextSelection(from + label.length)
+          .focus(everFocused.current ? null : 'end')
+          .insertContent({ type: 'text', text: label, marks: [{ type: 'link', attrs: { href } }] })
           .unsetMark('link') // lo que se escriba después ya no va enlazado
           .run();
       }
