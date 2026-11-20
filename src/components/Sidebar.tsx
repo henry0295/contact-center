@@ -79,10 +79,15 @@ const Sidebar: React.FC = () => {
         </nav>
 
         <div className="p-4 border-t border-gray-200">
-          <div className="bg-blue-50 p-3 rounded-lg">
+          <NavLink
+            to="/ayuda"
+            className={({ isActive }) =>
+              `block rounded-lg p-3 transition-colors ${isActive ? 'bg-blue-100 ring-1 ring-blue-300' : 'bg-blue-50 hover:bg-blue-100'}`
+            }
+          >
             <h3 className="text-sm font-medium text-blue-700">¿Necesitas ayuda?</h3>
-            <p className="mt-1 text-xs text-blue-600">Consulta la documentación del proyecto.</p>
-          </div>
+            <p className="mt-1 text-xs text-blue-600">Videos y manuales paso a paso de cada módulo.</p>
+          </NavLink>
         </div>
       </div>
     </aside>

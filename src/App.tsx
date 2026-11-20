@@ -25,6 +25,7 @@ const Contacts = lazy(() => import('./pages/Contacts'));
 const Users = lazy(() => import('./pages/Users'));
 const Settings = lazy(() => import('./pages/Settings'));
 const NotFound = lazy(() => import('./pages/NotFound'));
+const Help = lazy(() => import('./pages/Help'));
 
 /** Indicador mientras se descarga el paquete de la ruta. */
 const RouteFallback: React.FC = () => (
@@ -65,6 +66,7 @@ function App() {
                     <Route path="verification" element={<AdminRoute><Verification /></AdminRoute>} />
                     <Route path="contacts" element={<Contacts />} />
                     <Route path="settings" element={<Settings />} />
+                      <Route path="ayuda" element={<Help />} />
                     {/* Gestión de usuarios: solo administradores. */}
                     <Route path="users" element={<AdminRoute><Users /></AdminRoute>} />
                   </Route>

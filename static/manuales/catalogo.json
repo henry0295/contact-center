@@ -1,0 +1,103 @@
+{
+  "manuales": [
+    {
+      "id": "01-sms",
+      "titulo": "Módulo de SMS",
+      "descripcion": "Enviar una campaña de SMS personalizada cargando los contactos desde un CSV, con prueba y revisión del resultado en Reportes.",
+      "icono": "sms",
+      "segundos": 193,
+      "video": "/manuales/01-sms.mp4",
+      "pdf": "/manuales/01-sms.pdf",
+      "portada": "/manuales/01-sms.jpg",
+      "pasos": [
+        "Abre el módulo de SMS",
+        "Paso 1 · Nombre de la campaña",
+        "Paso 2 · Destinatarios desde un CSV",
+        "Paso 3 · Carga tu archivo",
+        "Paso 4 · Escribe el mensaje",
+        "Paso 5 · Revisa la vista previa",
+        "Paso 6 · Opciones del envío",
+        "Paso 7 · Envía una prueba",
+        "Paso 8 · Envía la campaña",
+        "Paso 9 · Revisa el resultado en Reportes",
+        "Detalle de la campaña"
+      ],
+      "actualizado": "2026-11-20"
+    },
+    {
+      "id": "02-email",
+      "titulo": "Módulo de Email",
+      "descripcion": "Enviar un correo personalizado a una lista en CSV, con formato, adjunto, email de respuesta, prueba y revisión en Reportes.",
+      "icono": "email",
+      "segundos": 174,
+      "video": "/manuales/02-email.mp4",
+      "pdf": "/manuales/02-email.pdf",
+      "portada": "/manuales/02-email.jpg",
+      "pasos": [
+        "Abre el módulo de Email",
+        "Paso 1 · Nombre y asunto",
+        "Paso 2 · Destinatarios desde un CSV",
+        "Paso 3 · Carga tu archivo",
+        "Paso 4 · Escribe el mensaje",
+        "Paso 5 · Adjunta un archivo",
+        "Paso 6 · Email de respuesta y opciones",
+        "Paso 7 · Envía una prueba",
+        "Paso 8 · Envía la campaña",
+        "Paso 9 · Revisa el resultado en Reportes"
+      ],
+      "actualizado": "2026-11-20"
+    },
+    {
+      "id": "03-llamadas",
+      "titulo": "Módulo de Llamadas",
+      "descripcion": "Originar llamadas automáticas con un mensaje de voz personalizado, hacer una llamada de prueba y ver contestadas, ocupadas y sin respuesta.",
+      "icono": "call",
+      "segundos": 160,
+      "video": "/manuales/03-llamadas.mp4",
+      "pdf": "/manuales/03-llamadas.pdf",
+      "portada": "/manuales/03-llamadas.jpg",
+      "pasos": [
+        "Abre el módulo de Llamadas",
+        "Paso 1 · Nombre y voz",
+        "Paso 2 · Destinatarios desde un CSV",
+        "Paso 3 · Carga tu archivo",
+        "Paso 4 · Escribe el mensaje de voz",
+        "Paso 5 · Opciones del envío",
+        "Paso 6 · Haz una llamada de prueba",
+        "Paso 7 · Origina las llamadas",
+        "Paso 8 · Revisa el resultado en Reportes"
+      ],
+      "actualizado": "2026-11-20"
+    },
+    {
+      "id": "04-whatsapp",
+      "titulo": "Módulo de WhatsApp",
+      "descripcion": "Enviar plantillas aprobadas por Meta con variables desde un CSV, revisar respuestas y la línea, y crear una plantilla nueva (administrador).",
+      "icono": "whatsapp",
+      "segundos": 282,
+      "video": "/manuales/04-whatsapp.mp4",
+      "pdf": "/manuales/04-whatsapp.pdf",
+      "portada": "/manuales/04-whatsapp.jpg",
+      "pasos": [
+        "Abre el módulo de WhatsApp",
+        "Las plantillas",
+        "Paso 1 · Nombre y plantilla",
+        "Paso 2 · Destinatarios desde un CSV",
+        "Paso 3 · Llena las variables",
+        "Paso 4 · Revisa la vista previa",
+        "Paso 5 · Envía una prueba",
+        "Paso 6 · Envía la campaña",
+        "Paso 7 · Las respuestas",
+        "El estado de la línea",
+        "Paso 8 · Revisa el resultado en Reportes",
+        "Crear una plantilla (administrador)",
+        "Nueva plantilla",
+        "Paso 1 · Nombre, categoría e idioma",
+        "Paso 2 · Encabezado y cuerpo",
+        "Paso 3 · Pie y botones",
+        "Paso 4 · Envía a aprobación"
+      ],
+      "actualizado": "2026-11-20"
+    }
+  ]
+}

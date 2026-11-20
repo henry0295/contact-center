@@ -1058,6 +1058,12 @@ $(if [[ "$HTTPS_MODE" == letsencrypt || "$HTTPS_MODE" == letsencrypt-dns ]]; the
         try_files \$uri =404;
     }
 
+    # Videos y manuales de la página Ayuda (static/manuales/ -> dist/manuales/).
+    location ^~ /manuales/ {
+        expires 7d;
+        try_files \$uri =404;
+    }
+
     location = /index.html {
         expires -1;
     }
