@@ -2,9 +2,6 @@
 
 namespace App\Service;
 
-use App\Database\Connection;
-use PDO;
-
 /**
  * Revisión de los links de un email antes de enviarlo.
  *
@@ -13,13 +10,16 @@ use PDO;
  *
  *  - error   (bloquea): esquemas peligrosos, links a una IP, usuario/clave en
  *                       la URL, texto visible que muestra otra dirección.
- *  - warning (avisa):   http sin cifrar, acortadores públicos, dominio ajeno al
- *                       remitente, dominios internacionales (posible imitación),
- *                       puertos raros, links relativos, demasiados links o
- *                       correo casi solo imagen.
+ *  - warning (avisa):   http sin cifrar, acortadores públicos, dominios
+ *                       internacionales (posible imitación), puertos raros,
+ *                       links relativos, demasiados links o correo casi solo
+ *                       imagen.
  *
- * LINK_CHECK_MODE=warn convierte los errores en avisos. LINK_ALLOWED_DOMAINS y
- * LINK_SHORTENERS_EXTRA (separados por comas) ajustan las listas.
+ * Se admite cualquier dominio de destino: no importa si coincide con el del
+ * remitente.
+ *
+ * LINK_CHECK_MODE=warn convierte los errores en avisos. LINK_SHORTENERS_EXTRA
+ * (separados por comas) amplía la lista de acortadores.
  */
 class LinkChecker
 {
@@ -43,55 +43,30 @@ class LinkChecker
 
     private const BLOCKED_SCHEMES = ['javascript', 'data', 'vbscript', 'file', 'blob', 'filesystem'];
 
-    /** @var string[] dominios de confianza (remitente, verificados, APP_URL, configurados) */
-    private array $trusted;
     private ?string $appHost;
     private bool $strict;
     /** @var string[] */
     private array $shorteners;
 
     /**
-     * @param string[] $trustedDomains
      * @param string[] $extraShorteners
      */
-    public function __construct(array $trustedDomains = [], ?string $appHost = null, bool $strict = true, array $extraShorteners = [])
+    public function __construct(?string $appHost = null, bool $strict = true, array $extraShorteners = [])
     {
-        $this->trusted = array_values(array_unique(array_filter(array_map([self::class, 'normalizeHost'], $trustedDomains))));
         $this->appHost = $appHost !== null && $appHost !== '' ? self::normalizeHost($appHost) : null;
         $this->strict = $strict;
         $this->shorteners = array_values(array_unique(array_merge(self::SHORTENERS, array_filter(array_map([self::class, 'normalizeHost'], $extraShorteners)))));
     }
 
     /** Construye el revisor con la configuración de esta instalación. */
-    public static function fromEnvironment(?PDO $pdo = null): self
+    public static function fromEnvironment(): self
     {
         $env = static fn (string $k): string => trim((string) ($_ENV[$k] ?? ''), " \"'");
         $list = static fn (string $k): array => array_values(array_filter(array_map('trim', explode(',', $env($k)))));
 
-        $trusted = $list('LINK_ALLOWED_DOMAINS');
-        $mailFrom = $env('MAIL_FROM');
-        if (str_contains($mailFrom, '@')) {
-            $trusted[] = substr(strrchr($mailFrom, '@'), 1);
-        }
         $appHost = parse_url($env('APP_URL'), PHP_URL_HOST) ?: null;
-        if ($appHost) {
-            $trusted[] = $appHost;
-        }
-        try {
-            $pdo ??= Connection::get();
-            foreach ($pdo->query("SELECT domain FROM domains WHERE verification_status = 'Success'")->fetchAll(PDO::FETCH_COLUMN) as $d) {
-                $trusted[] = (string) $d;
-            }
-            foreach ($pdo->query("SELECT email FROM senders WHERE verification_status = 'Success'")->fetchAll(PDO::FETCH_COLUMN) as $e) {
-                if (str_contains((string) $e, '@')) {
-                    $trusted[] = substr(strrchr((string) $e, '@'), 1);
-                }
-            }
-        } catch (\Throwable) {
-            // Sin BD se revisa igual, solo sin la lista de dominios verificados.
-        }
 
-        return new self($trusted, $appHost, strtolower($env('LINK_CHECK_MODE')) !== 'warn', $list('LINK_SHORTENERS_EXTRA'));
+        return new self($appHost, strtolower($env('LINK_CHECK_MODE')) !== 'warn', $list('LINK_SHORTENERS_EXTRA'));
     }
 
     /**
@@ -234,10 +209,6 @@ class LinkChecker
         if (isset($parts['port']) && !in_array((int) $parts['port'], [80, 443], true)) {
             $issues[] = self::issue('port', 'El link usa un puerto poco habitual (:' . (int) $parts['port'] . ').', 'warning');
         }
-        if (!empty($this->trusted) && !self::isIp($host) && !$this->isShortener($host) && !$this->isTrusted($host)) {
-            $issues[] = self::issue('foreign_domain', "Dominio distinto al del remitente ({$host}). Si es tuyo, agrégalo a LINK_ALLOWED_DOMAINS.", 'warning');
-        }
-
         return $issues;
     }
 
@@ -312,17 +283,6 @@ class LinkChecker
     private static function sameSite(string $a, string $b): bool
     {
         return $a === $b || str_ends_with($a, '.' . $b) || str_ends_with($b, '.' . $a);
-    }
-
-    private function isTrusted(string $host): bool
-    {
-        foreach ($this->trusted as $d) {
-            if ($host === $d || str_ends_with($host, '.' . $d)) {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     private function isShortener(string $host): bool

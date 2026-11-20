@@ -427,7 +427,7 @@ export function sendEmailTest(payload: { to: string; subject: string; body: stri
 export interface LinkIssue {
   url: string;
   text: string | null;
-  /** dangerous_scheme, ip_address, userinfo, deceptive_text, insecure, shortener, foreign_domain... */
+  /** dangerous_scheme, ip_address, userinfo, deceptive_text, insecure, shortener, idn... */
   rule: string;
   message: string;
   /** Solo en errores por fila del CSV. */
