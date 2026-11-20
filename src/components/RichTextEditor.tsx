@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { useEditor, EditorContent, Editor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Link from '@tiptap/extension-link';
@@ -19,6 +19,15 @@ interface Props {
   onChange: (html: string) => void;
   placeholder?: string;
   minHeight?: number;
+}
+
+export interface RichTextEditorHandle {
+  /**
+   * Inserta texto donde está el cursor (o reemplaza lo seleccionado). Si todavía
+   * no se ha escrito en el editor, lo pone al final. Devuelve false si el editor
+   * aún no está listo.
+   */
+  insertText: (text: string) => boolean;
 }
 
 /** Botón de la barra de herramientas. */
@@ -167,9 +176,14 @@ const LinkDialog: React.FC<{
   );
 };
 
-const RichTextEditor: React.FC<Props> = ({ value, onChange, placeholder, minHeight = 260 }) => {
+const RichTextEditor = forwardRef<RichTextEditorHandle, Props>(function RichTextEditor(
+  { value, onChange, placeholder, minHeight = 260 },
+  ref
+) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = React.useState(false);
+  // El cursor solo existe si ya se puso el foco en el editor alguna vez.
+  const everFocused = useRef(false);
 
   const editor = useEditor({
     extensions: [
@@ -183,6 +197,7 @@ const RichTextEditor: React.FC<Props> = ({ value, onChange, placeholder, minHeig
     ],
     content: value,
     onUpdate: ({ editor: ed }) => onChange(ed.getHTML()),
+    onFocus: () => { everFocused.current = true; },
     editorProps: {
       attributes: {
         class: 'prose-email focus:outline-none px-4 py-3',
@@ -199,6 +214,24 @@ const RichTextEditor: React.FC<Props> = ({ value, onChange, placeholder, minHeig
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value, editor]);
+
+  // API para quien use el editor: insertar variables ({{nombre}}) en el cursor.
+  useImperativeHandle(
+    ref,
+    () => ({
+      insertText: (text: string) => {
+        if (!editor || text === '') return false;
+        editor
+          .chain()
+          .focus(everFocused.current ? null : 'end')
+          .insertContent({ type: 'text', text })
+          .run();
+
+        return true;
+      },
+    }),
+    [editor]
+  );
 
   // Diálogo de enlace: null = cerrado.
   const [linkDialog, setLinkDialog] = useState<{ url: string; text: string; editing: boolean } | null>(null);
@@ -387,6 +420,6 @@ const RichTextEditor: React.FC<Props> = ({ value, onChange, placeholder, minHeig
       )}
     </div>
   );
-};
+});
 
 export default RichTextEditor;

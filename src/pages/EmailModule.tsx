@@ -1,11 +1,11 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Mail, Users, FileText, Trash2, Send, Loader2, LayoutTemplate, Eye, Pencil,
   Paperclip, Tag, Clock, CalendarX, TestTube2, Sparkles, History, ChevronDown, Download, Reply,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as api from '../services/api';
-import RichTextEditor from '../components/RichTextEditor';
+import RichTextEditor, { type RichTextEditorHandle } from '../components/RichTextEditor';
 import AttachmentPicker from '../components/AttachmentPicker';
 import { useSesData } from '../context/SesDataContext';
 import { refreshBalance } from '../components/BalanceGauge';
@@ -66,6 +66,8 @@ const EmailModule: React.FC = () => {
   const [fields, setFields] = useState<api.PersonalizationField[]>([]);
   const [previous, setPrevious] = useState<api.PreviousMessage[]>([]);
 
+  const editorRef = useRef<RichTextEditorHandle>(null);
+
   const [testOpen, setTestOpen] = useState(false);
   const [testEmail, setTestEmail] = useState('');
   const [testSending, setTestSending] = useState(false);
@@ -106,7 +108,10 @@ const EmailModule: React.FC = () => {
     return [];
   }, [source, pasteText, csvText, recipient]);
 
-  const insertToken = (token: string) => setMessage((m) => m + token);
+  // La variable va donde está el cursor del editor; si aún no está listo, al final.
+  const insertToken = (token: string) => {
+    if (!editorRef.current?.insertText(token)) setMessage((m) => m + token);
+  };
   const { result: linkResult, loading: linkLoading } = useLinkCheck(message, tab === 'compose');
 
   const onCsvFile = (file?: File) => {
@@ -458,6 +463,7 @@ const EmailModule: React.FC = () => {
               )}
 
               <RichTextEditor
+                ref={editorRef}
                 value={message}
                 onChange={setMessage}
                 placeholder="Escribe tu mensaje. Puedes dar formato, insertar enlaces e imágenes."
