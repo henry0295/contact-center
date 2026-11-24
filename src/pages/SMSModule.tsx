@@ -8,7 +8,7 @@ import toast from 'react-hot-toast';
 import * as api from '../services/api';
 import { refreshBalance } from '../components/BalanceGauge';
 import {
-  type RecipientEntry, parseRecipients, parseRecipientsCsv, downloadCsv, PHONE_HEADERS,
+  type RecipientEntry, parseRecipients, parseRecipientsCsv, downloadCsv, PHONE_HEADERS, readCsvFile,
 } from '../utils/csvRecipients';
 
 type Tab = 'compose' | 'templates' | 'replies';
@@ -140,20 +140,17 @@ const SMSModule: React.FC = () => {
 
   const onCsvFile = (file?: File) => {
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const text = String(reader.result || '');
+    void readCsvFile(file).then((text) => {
       setCsvText(text);
       setCsvVariableNames(parseSmsCsv(text).variableNames);
-    };
-    reader.readAsText(file);
+    });
   };
 
   const downloadSimpleTemplate = () => {
     downloadCsv('plantilla-sms-simple.csv', [
       ['telefono'],
-      ['+573001112233'],
-      ['+573004445566'],
+      ['3001112233'],
+      ['3004445566'],
     ]);
   };
 
@@ -163,8 +160,8 @@ const SMSModule: React.FC = () => {
   const downloadVariablesTemplate = () => {
     downloadCsv('plantilla-sms-con-variables.csv', [
       ['telefono', 'nombre', 'valor'],
-      ['+573001112233', 'Ana Pérez', '150000'],
-      ['+573004445566', 'Carlos Gómez', '98500'],
+      ['3001112233', 'Ana Pérez', '150000'],
+      ['3004445566', 'Carlos Gómez', '98500'],
     ]);
   };
 

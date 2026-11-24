@@ -7,7 +7,7 @@ import toast from 'react-hot-toast';
 import * as api from '../services/api';
 import { refreshBalance } from '../components/BalanceGauge';
 import {
-  type RecipientEntry, parseRecipients, parseRecipientsCsv, downloadCsv, PHONE_HEADERS,
+  type RecipientEntry, parseRecipients, parseRecipientsCsv, downloadCsv, PHONE_HEADERS, readCsvFile,
 } from '../utils/csvRecipients';
 
 type RecipientSource = 'paste' | 'csv' | 'list';
@@ -74,13 +74,10 @@ const CallModule: React.FC = () => {
 
   const onCsvFile = (file?: File) => {
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const text = String(reader.result || '');
+    void readCsvFile(file).then((text) => {
       setCsvText(text);
       setCsvVariableNames(parseCallCsv(text).variableNames);
-    };
-    reader.readAsText(file);
+    });
   };
 
   const downloadSimpleTemplate = () => {

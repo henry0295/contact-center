@@ -57,7 +57,7 @@ export function parseRecipientsCsv(
   identifierHeaders: string[],
   identifierField: 'phone' | 'email'
 ): ParsedCsv {
-  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
+  const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
   if (lines.length === 0) return { rows: [], hasVariables: false, variableNames: [] };
 
   const delimiter = (lines[0].match(/;/g)?.length ?? 0) > (lines[0].match(/,/g)?.length ?? 0) ? ';' : ',';
@@ -104,11 +104,31 @@ export function parseRecipientsCsv(
   };
 }
 
-/** Dispara la descarga de un CSV generado en el navegador (sin pedir nada al backend). */
+/**
+ * Lee un CSV subido por el usuario. Excel en español guarda "CSV (delimitado
+ * por comas)" en Windows-1252 (no UTF-8): si el archivo no es UTF-8 válido se
+ * decodifica así, para que "Pérez" no llegue como "P�rez".
+ */
+export async function readCsvFile(file: File): Promise<string> {
+  const buf = await file.arrayBuffer();
+  let text: string;
+  try {
+    text = new TextDecoder('utf-8', { fatal: true }).decode(buf);
+  } catch {
+    text = new TextDecoder('windows-1252').decode(buf);
+  }
+  return text.replace(/^\uFEFF/, '');
+}
+
+/**
+ * Dispara la descarga de un CSV generado en el navegador (sin pedir nada al backend).
+ * Separado por ";": es el separador de listas de Excel en español (Colombia),
+ * así el archivo se abre ya en columnas. La carga acepta "," y ";".
+ */
 export function downloadCsv(filename: string, lines: string[][]): void {
   const escape = (v: string) => (/[",;\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
   // BOM UTF-8: para que Excel abra con tildes correctas en vez de caracteres sueltos.
-  const csv = '\uFEFF' + lines.map((row) => row.map(escape).join(',')).join('\r\n');
+  const csv = '\uFEFF' + lines.map((row) => row.map(escape).join(';')).join('\r\n');
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');

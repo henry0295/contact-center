@@ -10,7 +10,7 @@ import { useUser } from '../context/UserContext';
 import { refreshBalance } from '../components/BalanceGauge';
 import WaTemplates from '../components/WaTemplates';
 import {
-  type RecipientEntry, parseRecipients, parseRecipientsCsv, downloadCsv, PHONE_HEADERS,
+  type RecipientEntry, parseRecipients, parseRecipientsCsv, downloadCsv, PHONE_HEADERS, readCsvFile,
 } from '../utils/csvRecipients';
 
 type Tab = 'compose' | 'templates' | 'replies' | 'line' | 'profile';
@@ -251,13 +251,10 @@ const Composer: React.FC<{
 
   const onCsvFile = (file?: File) => {
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const text = String(reader.result || '');
+    void readCsvFile(file).then((text) => {
       setCsvText(text);
       setCsvVariableNames(parseWaCsv(text).variableNames);
-    };
-    reader.readAsText(file);
+    });
   };
 
   const checkContent = (): boolean => {
@@ -486,8 +483,8 @@ const Composer: React.FC<{
                   type="button"
                   onClick={() => downloadCsv('plantilla-whatsapp.csv', [
                     ['telefono', 'nombre', 'valor'],
-                    ['+573001112233', 'Ana Pérez', '150000'],
-                    ['+573004445566', 'Carlos Gómez', '98500'],
+                    ['3001112233', 'Ana Pérez', '150000'],
+                    ['3004445566', 'Carlos Gómez', '98500'],
                   ])}
                   className="inline-flex items-center gap-1 rounded-md border border-gray-300 px-2.5 py-1.5 font-medium text-gray-600 hover:bg-gray-50"
                 >

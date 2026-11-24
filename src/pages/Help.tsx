@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { BookOpen, Download, FileText, Mail, MessageCircle, MessageSquare, PhoneCall, PlayCircle, X } from 'lucide-react';
+import { BookOpen, Download, FileSpreadsheet, FileText, Mail, MessageCircle, MessageSquare, PhoneCall, PlayCircle, X } from 'lucide-react';
 
 /** Manual de un módulo (static/manuales/catalogo.json, lo genera la herramienta de videos). */
 interface Manual {
@@ -16,7 +16,7 @@ interface Manual {
   actualizado: string;
 }
 
-const ICONS: Record<string, React.ElementType> = { sms: MessageSquare, email: Mail, call: PhoneCall, whatsapp: MessageCircle };
+const ICONS: Record<string, React.ElementType> = { sms: MessageSquare, email: Mail, call: PhoneCall, whatsapp: MessageCircle, excel: FileSpreadsheet };
 
 const duration = (s: number) => `${Math.floor(s / 60)} min ${String(s % 60).padStart(2, '0')} s`;
 const fileName = (m: Manual, ext: string) => `Manual ${m.titulo.replace(/^Módulo de /, '')}.${ext}`;

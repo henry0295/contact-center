@@ -13,7 +13,7 @@ import SafeHtmlFrame from '../components/SafeHtmlFrame';
 import { LinkCheckPanel, LinkCheckDialog } from '../components/LinkCheckPanel';
 import { useLinkCheck } from '../hooks/useLinkCheck';
 import {
-  type RecipientEntry, parseRecipients, parseRecipientsCsv, downloadCsv, EMAIL_HEADERS,
+  type RecipientEntry, parseRecipients, parseRecipientsCsv, downloadCsv, EMAIL_HEADERS, readCsvFile,
 } from '../utils/csvRecipients';
 
 // GrapesJS pesa ~1.5 MB: se carga solo cuando se abre el editor de plantillas,
@@ -116,13 +116,10 @@ const EmailModule: React.FC = () => {
 
   const onCsvFile = (file?: File) => {
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const text = String(reader.result || '');
+    void readCsvFile(file).then((text) => {
       setCsvText(text);
       setCsvVariableNames(parseEmailCsv(text).variableNames);
-    };
-    reader.readAsText(file);
+    });
   };
 
   const downloadSimpleTemplate = () => {

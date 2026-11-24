@@ -1,6 +1,29 @@
 {
   "manuales": [
     {
+      "id": "00-csv-excel",
+      "titulo": "Preparar el archivo CSV en Excel",
+      "descripcion": "Abrir la plantilla en Excel, separar en columnas los datos que vienen juntos (Texto en columnas), llenarlo, guardarlo como CSV UTF-8 y cargarlo. Sirve para todos los módulos.",
+      "icono": "excel",
+      "segundos": 182,
+      "video": "/manuales/00-csv-excel.mp4",
+      "pdf": "/manuales/00-csv-excel.pdf",
+      "portada": "/manuales/00-csv-excel.jpg",
+      "pasos": [
+        "Paso 1 · Descarga la plantilla",
+        "La plantilla ya viene en columnas",
+        "Si los datos vienen todos juntos",
+        "Paso 2 · Texto en columnas",
+        "Asistente · paso 1 de 3",
+        "Asistente · paso 2 de 3",
+        "Asistente · paso 3 de 3",
+        "Paso 3 · Llena o corrige los datos",
+        "Paso 4 · Guarda como CSV",
+        "Paso 5 · Carga el archivo en la plataforma"
+      ],
+      "actualizado": "2026-11-24"
+    },
+    {
       "id": "01-sms",
       "titulo": "Módulo de SMS",
       "descripcion": "Enviar una campaña de SMS personalizada cargando los contactos desde un CSV, con prueba y revisión del resultado en Reportes.",
